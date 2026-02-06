@@ -12,12 +12,19 @@ from torch.optim import AdamW
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from modules import ViTDetBackbone
 from dataset import OAMTCDCOCODataset
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+from lightning.pytorch.loggers import TensorBoardLogger
 from torchvision.utils import draw_bounding_boxes, draw_segmentation_masks
 from torchvision.io import write_png
 from tifffile import imread
 import torch.nn as nn
 import torchvision.transforms.functional as F
+
+
+class DotDict(dict):
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
 
 
 def collate_fn(batch):
@@ -114,6 +121,7 @@ class LitMaskRCNN(L.LightningModule):
             "lr_scheduler": {
                 "scheduler": scheduler,
                 "interval": "step",
+                "frequency": 1,
             },
         }
 
@@ -244,3 +252,90 @@ class LitMaskRCNN(L.LightningModule):
         # ALWAYS save (even if no detections)
         write_png(result_img, save_path)
         print(f"Saved inference image to: {save_path}")
+
+
+def main(args):
+    backbone_with_fpn = ViTDetBackbone(
+        vit_name=args.vit_name,
+        timm_pretrained=False,
+        img_size=args.img_size
+    )
+    if args.use_pretrained:
+        backbone_with_fpn.vit.load_checkpoint(args.ckpt_path)
+
+    if args.use_lora:
+        backbone_with_fpn.vit.apply_lora(args.lora_rank)
+        args.freeze_backbone = False  # this is automatically done in .apply_lora and is not needed
+
+    train_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
+                                      folds=args.train_folds,
+                                      return_masks=True)
+    val_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
+                                    folds=args.val_folds,
+                                    return_masks=True)
+    test_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
+                                     split='test',
+                                     folds=None,
+                                     return_masks=True)
+    lightning_maskrcnn = LitMaskRCNN(
+        backbone=backbone_with_fpn, train_dataset=train_dataset, val_dataset=val_dataset, test_dataset=test_dataset,
+        args=args
+    )
+
+    checkpoint_callback = ModelCheckpoint(dirpath=args.output_dir,
+                                          # every_n_epochs=int(args.max_epochs / 3),
+                                          save_last=True)
+    logger = TensorBoardLogger(save_dir=args.output_dir,
+                               name="",
+                               default_hp_metric=False)
+
+    early_stop_callback = EarlyStopping(
+        monitor="val/mask_mAP",
+        patience=3,
+        verbose=True,
+        mode="max"
+    )
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+
+    trainer = L.Trainer(
+        max_epochs=args.max_epochs,
+        accelerator="gpu",
+        devices=1,
+        callbacks=[checkpoint_callback, early_stop_callback, lr_monitor],
+        logger=logger,
+        precision="16-mixed",
+        check_val_every_n_epoch=3,
+        # limit_train_batches=10,
+        # limit_val_batches=10,
+        # limit_test_batches=10,
+        log_every_n_steps=50
+    )
+
+    trainer.fit(model=lightning_maskrcnn)
+    trainer.test()
+
+
+if __name__ == '__main__':
+    args = DotDict(
+        num_classes=3,
+        num_workers=8,
+        batch_size=2,
+        lr=1e-4,
+        weight_decay=0.05,
+        warmup_steps=10000,
+        use_lora=False,
+        lora_rank=4,
+        use_pretrained=True,
+        ckpt_path="/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth",
+        freeze_backbone=True,
+        data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
+        output_dir="./experiments/exp_frozen_backbone/",
+        candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
+        train_folds=[0],  # [0, 1, 2, 3]
+        val_folds=[4],
+        max_epochs=10,
+        img_size=1024,
+        vit_name="vit_base_patch16_224"
+    )
+
+    main(args)
