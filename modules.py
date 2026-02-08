@@ -153,7 +153,7 @@ class ViTBackbone(nn.Module):
         """
         Load custom ViT checkpoint (handles arbitrary image sizes and LoRA wrapping)
         """
-        state_dict = torch.load(ckpt_path, map_location="cpu")['teacher']
+        state_dict = torch.load(ckpt_path, map_location="cpu") # ['teacher']
         # state_dict = {"model."+k: v for k, v in state_dict.items()}
 
         # vit_module = self._get_vit_module()
