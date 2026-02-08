@@ -19,6 +19,43 @@ from torchvision.io import write_png
 from tifffile import imread
 import torch.nn as nn
 import torchvision.transforms.functional as F
+import argparse
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description="Training configuration")
+
+    parser.add_argument("--num_classes", type=int, default=3)
+    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=8)
+
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--weight_decay", type=float, default=0.05)
+    parser.add_argument("--warmup_steps", type=int, default=10000)
+
+    parser.add_argument("--use_lora", action="store_true", default=False)
+    parser.add_argument("--lora_rank", type=int, default=4)
+
+    parser.add_argument("--use_pretrained", action="store_true", default=True)
+    parser.add_argument("--ckpt_path", type=str,
+                        default="")
+    parser.add_argument("--freeze_backbone", action="store_true", default=True)
+
+    parser.add_argument("--data_path", type=str,
+                        default="")
+    parser.add_argument("--output_dir", type=str,
+                        default="")
+    parser.add_argument("--candidate_path", type=str,
+                        default="")
+
+    parser.add_argument("--train_folds", type=int, nargs="+", default=[0, 1, 2, 3])
+    parser.add_argument("--val_folds", type=int, nargs="+", default=[4])
+
+    parser.add_argument("--max_epochs", type=int, default=10)
+    parser.add_argument("--img_size", type=int, default=1024)
+    parser.add_argument("--vit_name", type=str, default="vit_base_patch16_224")
+
+    return parser.parse_args()
 
 
 class DotDict(dict):
@@ -316,26 +353,26 @@ def main(args):
 
 
 if __name__ == '__main__':
-    args = DotDict(
-        num_classes=3,
-        num_workers=8,
-        batch_size=2,
-        lr=1e-4,
-        weight_decay=0.05,
-        warmup_steps=10000,
-        use_lora=False,
-        lora_rank=4,
-        use_pretrained=True,
-        ckpt_path="/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth",
-        freeze_backbone=True,
-        data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
-        output_dir="./experiments/exp_frozen_backbone/",
-        candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
-        train_folds=[0],  # [0, 1, 2, 3]
-        val_folds=[4],
-        max_epochs=10,
-        img_size=1024,
-        vit_name="vit_base_patch16_224"
-    )
-
+    # args = DotDict(
+    #     num_classes=3,
+    #     num_workers=8,
+    #     batch_size=8,
+    #     lr=1e-4,
+    #     weight_decay=0.05,
+    #     warmup_steps=10000,
+    #     use_lora=False,
+    #     lora_rank=4,
+    #     use_pretrained=True,
+    #     ckpt_path="/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth",
+    #     freeze_backbone=True,
+    #     data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
+    #     output_dir="./experiments/exp_frozen_backbone/",
+    #     candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
+    #     train_folds=[0],  # [0, 1, 2, 3]
+    #     val_folds=[4],
+    #     max_epochs=10,
+    #     img_size=1024,
+    #     vit_name="vit_base_patch16_224"
+    # )
+    args = get_args().parse_args()
     main(args)
