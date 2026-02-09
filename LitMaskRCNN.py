@@ -310,6 +310,10 @@ def main(args):
         backbone_with_fpn.vit.apply_lora(args.lora_rank)
         args.freeze_backbone = False  # this is automatically done in .apply_lora and is not needed
 
+    if args.freeze_backbone:
+        backbone_with_fpn.vit.freeze_parameters()
+
+
     train_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
                                       folds=args.train_folds,
                                       return_masks=True)
