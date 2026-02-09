@@ -27,7 +27,7 @@ def get_args():
 
     parser.add_argument("--num_classes", type=int, default=3)
     parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=4)
 
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.05)
@@ -90,10 +90,10 @@ class LitMaskRCNN(L.LightningModule):
         #     for param in self.model.backbone.vit.vit.parameters():
         #         param.requires_grad = False
 
-        self.val_map_bbox = MeanAveragePrecision(iou_type="bbox", device=self.device)
+        self.val_map_bbox = MeanAveragePrecision(iou_type="bbox")
 
-        self.test_map_bbox = MeanAveragePrecision(iou_type="bbox", device=self.device)
-        self.test_map_segm = MeanAveragePrecision(iou_type="segm", device=self.device)
+        self.test_map_bbox = MeanAveragePrecision(iou_type="bbox")
+        self.test_map_segm = MeanAveragePrecision(iou_type="segm")
         self.candidate_path = self.args.candidate_path
 
     @staticmethod
@@ -121,6 +121,12 @@ class LitMaskRCNN(L.LightningModule):
             min_size=img_size,
             max_size=img_size
         )
+        # 1. Remove low-confidence detections
+        model.roi_heads.score_thresh = 0.5  # try 0.3–0.7
+        # 2. Stronger Non-Max Suppression
+        model.roi_heads.nms_thresh = 0.3  # default ~0.5
+        # 3. Hard cap detections per image
+        model.roi_heads.detections_per_img = 100
         return model
 
     def configure_optimizers(self):
@@ -374,5 +380,5 @@ if __name__ == '__main__':
     #     img_size=1024,
     #     vit_name="vit_base_patch16_224"
     # )
-    args = get_args().parse_args()
+    args = get_args()
     main(args)
