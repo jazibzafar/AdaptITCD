@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import timm
 from lora_pytorch import LoRA
+from torchvision.models.feature_extraction import create_feature_extractor
+from torchvision.ops.feature_pyramid_network import FeaturePyramidNetwork, LastLevelMaxPool
+from torchvision.models import swin_v2_b
+from torchvision.models import resnet50
+from utils import model_replace_prefix
 
 
 def freeze_except_lora(model):
@@ -113,7 +118,6 @@ class ViTBackbone(nn.Module):
     def __init__(
         self,
         model_name="vit_base_patch16_224",
-        timm_pretrained=False,
         img_size=1024,
     ):
         super().__init__()
@@ -123,7 +127,7 @@ class ViTBackbone(nn.Module):
         # Create ViT with features_only
         self.vit = timm.create_model(
             model_name,
-            pretrained=timm_pretrained,
+            pretrained=False,
             features_only=True,
             img_size=img_size,
         )
@@ -189,15 +193,12 @@ class ViTDetBackbone(nn.Module):
     """
     def __init__(
         self,
-        vit_name="vit_base_patch16_224",
-        timm_pretrained=False,
         img_size=1024,
         out_channels=256,
     ):
         super().__init__()
         self.vit = ViTBackbone(
-            model_name=vit_name,
-            timm_pretrained=timm_pretrained,
+            model_name="vit_base_patch16_224",
             img_size=img_size,
         )
         self.fpn = SimpleFeaturePyramid(
@@ -210,3 +211,89 @@ class ViTDetBackbone(nn.Module):
         x = self.vit(x)
         return self.fpn(x)
 
+
+class ResNet50Backbone(nn.Module):
+    def __init__(self, checkpoint_path=None):
+        super().__init__()
+        # 1. Load the base ResNet50
+        # weights=None if loading a full custom state_dict
+        base_model = resnet50(weights=None)
+
+        if checkpoint_path:
+            state_dict = torch.load(checkpoint_path, map_location='cpu')
+            state_dict = model_replace_prefix(state_dict, "", "backbone.body.")
+            base_model.load_state_dict(state_dict, strict=False)
+            print(f"ResNet50 weights loaded from {checkpoint_path}")
+
+        # 2. ResNet stages: layer1=1/4, layer2=1/8, layer3=1/16, layer4=1/32
+        return_nodes = {
+            'layer1': '0',
+            'layer2': '1',
+            'layer3': '2',
+            'layer4': '3',
+        }
+
+        # ResNet50 out_channels for these layers are [256, 512, 1024, 2048]
+        self.body = create_feature_extractor(base_model, return_nodes=return_nodes)
+        self.out_channels = [256, 512, 1024, 2048]
+
+    def freeze_parameters(self):
+        for param in self.body.parameters():
+            param.requires_grad = False
+
+    def forward(self, x):
+        return self.body(x)
+
+
+class TorchvisionSwinV2Backbone(nn.Module):
+    def __init__(self, checkpoint_path=None):
+        super().__init__()
+        # 1. Initialize the base model
+        # We use weights=None if you are loading a full custom state_dict
+        base_model = swin_v2_b(weights=None)
+
+        if checkpoint_path:
+            state_dict = torch.load(checkpoint_path, map_location='cpu')
+            state_dict = model_replace_prefix(state_dict, "", "backbone.backbone.")
+            base_model.load_state_dict(state_dict, strict=False)
+            print(f"Custom weights loaded from {checkpoint_path}")
+
+        # 2. Extract specific stages for the FPN
+        # These keys correspond to the 4 stages of the Swin hierarchy
+        return_nodes = {
+            'features.1': '0',
+            'features.3': '1',
+            'features.5': '2',
+            'features.7': '3',
+        }
+
+        self.body = create_feature_extractor(base_model, return_nodes=return_nodes)
+        self.out_channels = [128, 256, 512, 1024]
+
+    def freeze_parameters(self):
+        for param in self.body.parameters():
+            param.requires_grad = False
+
+    def forward(self, x):
+        out = self.body(x)
+        # Permute from [B, H, W, C] to [B, C, H, W]
+        for k in out:
+            out[k] = out[k].permute(0, 3, 1, 2).contiguous()
+        return out
+
+
+class BackboneWithFPN(nn.Module):
+    def __init__(self, body):
+        super().__init__()
+        self.body = body
+        self.fpn = FeaturePyramidNetwork(
+            in_channels_list=body.out_channels,
+            out_channels=256,
+            # extra_blocks=LastLevelMaxPool(),
+        )
+        self.out_channels = 256
+
+    def forward(self, x):
+        x = self.body(x)
+        x = self.fpn(x)
+        return x

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.optim.lr_scheduler import LambdaLR
 from torch.optim import AdamW
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
-from modules import ViTDetBackbone
+from modules import ViTDetBackbone, TorchvisionSwinV2Backbone, ResNet50Backbone, BackboneWithFPN
 from dataset import OAMTCDCOCODataset
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -20,6 +20,8 @@ from tifffile import imread
 import torch.nn as nn
 import torchvision.transforms.functional as F
 import argparse
+import sys
+
 
 
 def get_args():
@@ -53,7 +55,7 @@ def get_args():
 
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--img_size", type=int, default=1024)
-    parser.add_argument("--vit_name", type=str, default="vit_base_patch16_224")
+    parser.add_argument("--arch_type", type=str, default="")
 
     return parser.parse_args()
 
@@ -85,7 +87,7 @@ class LitMaskRCNN(L.LightningModule):
         self.batch_size = self.args.batch_size
         self.num_workers = self.args.num_workers
 
-        self.model = self.build_mask_rcnn(self.backbone, self.args.num_classes, self.args.img_size)
+        self.model = self.build_mask_rcnn(self.args.arch_type, self.backbone, self.args.num_classes, self.args.img_size)
         # if args.freeze_backbone:
         #     for param in self.model.backbone.vit.vit.parameters():
         #         param.requires_grad = False
@@ -97,24 +99,24 @@ class LitMaskRCNN(L.LightningModule):
         self.candidate_path = self.args.candidate_path
 
     @staticmethod
-    def build_mask_rcnn(arch_name, backbone, num_classes, img_size):
+    def build_mask_rcnn(arch_type, backbone, num_classes, img_size):
         anchor_generator = AnchorGenerator(
             sizes=((32,), (64,), (128,), (256,)),
             aspect_ratios=((0.5, 1.0, 2.0),) * 4,
         )
 
-        if arch_name=='ViT-B':
-            featmap_names = ["0", "1", "2", "3"],
-        elif arch_name=='Swin-V2-B' or 'ResNet-50':
-            featmap_names = ["0", "1", "2", "3", "pool"]
+        # if arch_type == 'vit':
+        #     featmap_names = ["0", "1", "2", "3"],
+        # else:  # this case is for both swin and resnet
+        #     featmap_names = ["0", "1", "2", "3", "pool"]
 
         roi_pooler = torchvision.ops.MultiScaleRoIAlign(
-            featmap_names=featmap_names,
+            featmap_names=["0", "1", "2", "3"],
             output_size=7,
             sampling_ratio=2,
         )
         mask_pooler = torchvision.ops.MultiScaleRoIAlign(
-            featmap_names=featmap_names,
+            featmap_names=["0", "1", "2", "3"],
             output_size=14,
             sampling_ratio=2,
         )
@@ -122,8 +124,8 @@ class LitMaskRCNN(L.LightningModule):
             backbone=backbone,
             num_classes=num_classes,
             rpn_anchor_generator=anchor_generator,
-            box_roi_pool=roi_pooler,
-            mask_roi_pool=mask_pooler,
+            # box_roi_pool=roi_pooler,
+            # mask_roi_pool=mask_pooler,
             min_size=img_size,
             max_size=img_size
         )
@@ -304,21 +306,38 @@ class LitMaskRCNN(L.LightningModule):
 
 
 def main(args):
-    backbone_with_fpn = ViTDetBackbone(
-        vit_name=args.vit_name,
-        timm_pretrained=False,
-        img_size=args.img_size
-    )
-    if args.use_pretrained:
-        backbone_with_fpn.vit.load_checkpoint(args.ckpt_path)
+    # initializing the model
+    assert args.arch_type in {"vit", "swin", "resnet"}, \
+        f"Unsupported arch_type: {args.arch_type}"
+    if args.arch_type == 'vit':
+        backbone_with_fpn = ViTDetBackbone(
+            img_size=args.img_size
+        )
+        if args.use_pretrained:
+            backbone_with_fpn.vit.load_checkpoint(args.ckpt_path)
+        if args.use_lora:
+            backbone_with_fpn.vit.apply_lora(args.lora_rank)
+            args.freeze_backbone = False  # this is automatically done in .apply_lora and is not needed
+        if args.freeze_backbone:
+            backbone_with_fpn.vit.freeze_parameters()
+    elif args.arch_type == 'swin':
+        swin = TorchvisionSwinV2Backbone(
+            checkpoint_path=args.ckpt_path if args.use_pretrained else None
+        )
+        if args.freeze_backbone:
+            swin.freeze_parameters()
+        backbone_with_fpn = BackboneWithFPN(body=swin)
 
-    if args.use_lora:
-        backbone_with_fpn.vit.apply_lora(args.lora_rank)
-        args.freeze_backbone = False  # this is automatically done in .apply_lora and is not needed
-
-    if args.freeze_backbone:
-        backbone_with_fpn.vit.freeze_parameters()
-
+    elif args.arch_type == 'resnet':
+        resnet50 = ResNet50Backbone(
+            checkpoint_path=args.ckpt_path if args.use_pretrained else None
+        )
+        if args.freeze_backbone:
+            resnet50.freeze_parameters()
+        backbone_with_fpn = BackboneWithFPN(body=resnet50)
+    else:
+        print("Please choose the correct backbone.")
+        sys.exit(1)
 
     train_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
                                       folds=args.train_folds,
@@ -343,7 +362,7 @@ def main(args):
                                default_hp_metric=False)
 
     early_stop_callback = EarlyStopping(
-        monitor="val/mask_mAP",
+        monitor="val/bbox_mAP",
         patience=3,
         verbose=True,
         mode="max"
@@ -361,7 +380,7 @@ def main(args):
         # limit_train_batches=10,
         # limit_val_batches=10,
         # limit_test_batches=10,
-        log_every_n_steps=50
+        log_every_n_steps=2
     )
 
     trainer.fit(model=lightning_maskrcnn)
@@ -372,23 +391,26 @@ if __name__ == '__main__':
     # args = DotDict(
     #     num_classes=3,
     #     num_workers=8,
-    #     batch_size=8,
+    #     batch_size=1,
     #     lr=1e-4,
     #     weight_decay=0.05,
     #     warmup_steps=10000,
     #     use_lora=False,
     #     lora_rank=4,
     #     use_pretrained=True,
-    #     ckpt_path="/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth",
+    #     ckpt_path="/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth",
+    #     # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
+    #     # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
+    #     # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
     #     freeze_backbone=True,
     #     data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
     #     output_dir="./experiments/exp_frozen_backbone/",
     #     candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
     #     train_folds=[0],  # [0, 1, 2, 3]
     #     val_folds=[4],
-    #     max_epochs=10,
+    #     max_epochs=3,
     #     img_size=1024,
-    #     vit_name="vit_base_patch16_224"
+    #     arch_type="swin"
     # )
     args = get_args()
     main(args)
