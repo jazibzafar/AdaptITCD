@@ -41,7 +41,7 @@ def get_args():
     parser.add_argument("--use_pretrained", action="store_true", default=True)
     parser.add_argument("--ckpt_path", type=str,
                         default="")
-    parser.add_argument("--freeze_backbone", action="store_true", default=True)
+    parser.add_argument("--freeze_backbone", action="store_true", default=False)
 
     parser.add_argument("--data_path", type=str,
                         default="")
@@ -380,7 +380,7 @@ def main(args):
         # limit_train_batches=10,
         # limit_val_batches=10,
         # limit_test_batches=10,
-        log_every_n_steps=2
+        log_every_n_steps=50
     )
 
     trainer.fit(model=lightning_maskrcnn)
