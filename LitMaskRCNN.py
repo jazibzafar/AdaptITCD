@@ -97,18 +97,24 @@ class LitMaskRCNN(L.LightningModule):
         self.candidate_path = self.args.candidate_path
 
     @staticmethod
-    def build_mask_rcnn(backbone, num_classes, img_size):
+    def build_mask_rcnn(arch_name, backbone, num_classes, img_size):
         anchor_generator = AnchorGenerator(
             sizes=((32,), (64,), (128,), (256,)),
             aspect_ratios=((0.5, 1.0, 2.0),) * 4,
         )
+
+        if arch_name=='ViT-B':
+            featmap_names = ["0", "1", "2", "3"],
+        elif arch_name=='Swin-V2-B' or 'ResNet-50':
+            featmap_names = ["0", "1", "2", "3", "pool"]
+
         roi_pooler = torchvision.ops.MultiScaleRoIAlign(
-            featmap_names=["0", "1", "2", "3"],
+            featmap_names=featmap_names,
             output_size=7,
             sampling_ratio=2,
         )
         mask_pooler = torchvision.ops.MultiScaleRoIAlign(
-            featmap_names=["0", "1", "2", "3"],
+            featmap_names=featmap_names,
             output_size=14,
             sampling_ratio=2,
         )
