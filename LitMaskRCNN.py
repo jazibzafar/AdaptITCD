@@ -11,6 +11,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.optim import AdamW
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from modules import ViTDetBackbone, TorchvisionSwinV2Backbone, ResNet50Backbone, BackboneWithFPN
+from modules import AltTorchvisionResNet50Backbone, AltTorchvisionSwinV2Backbone
 from dataset import OAMTCDCOCODataset
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -41,8 +42,9 @@ def get_args():
     parser.add_argument("--use_pretrained", action="store_true", default=True)
     parser.add_argument("--ckpt_path", type=str,
                         default="")
-    parser.add_argument("--freeze_backbone", action="store_true", default=False)
-
+    # parser.add_argument("--freeze_backbone", action="store_true", default=False)
+    parser.add_argument("--strategy", type=str,
+                        default="full", choices=["gradual", "adaptive", "frozen", "full"])
     parser.add_argument("--data_path", type=str,
                         default="")
     parser.add_argument("--output_dir", type=str,
@@ -87,45 +89,30 @@ class LitMaskRCNN(L.LightningModule):
         self.batch_size = self.args.batch_size
         self.num_workers = self.args.num_workers
 
-        self.model = self.build_mask_rcnn(self.args.arch_type, self.backbone, self.args.num_classes, self.args.img_size)
-        # if args.freeze_backbone:
-        #     for param in self.model.backbone.vit.vit.parameters():
-        #         param.requires_grad = False
+        self.model = self.build_mask_rcnn(self.backbone, self.args.num_classes, self.args.img_size)
+        if getattr(self.args, "strategy", None) == "gradual" or "frozen":
+            if self.args.arch_type == "vit":
+                for param in self.model.backbone.vit.vit.parameters():
+                    param.requires_grad = False
+            else:
+                for param in self.model.backbone.body.parameters():
+                    param.requires_grad = False
 
         self.val_map_bbox = MeanAveragePrecision(iou_type="bbox")
-
         self.test_map_bbox = MeanAveragePrecision(iou_type="bbox")
         self.test_map_segm = MeanAveragePrecision(iou_type="segm")
         self.candidate_path = self.args.candidate_path
 
     @staticmethod
-    def build_mask_rcnn(arch_type, backbone, num_classes, img_size):
+    def build_mask_rcnn(backbone, num_classes, img_size):
         anchor_generator = AnchorGenerator(
             sizes=((32,), (64,), (128,), (256,)),
             aspect_ratios=((0.5, 1.0, 2.0),) * 4,
-        )
-
-        # if arch_type == 'vit':
-        #     featmap_names = ["0", "1", "2", "3"],
-        # else:  # this case is for both swin and resnet
-        #     featmap_names = ["0", "1", "2", "3", "pool"]
-
-        roi_pooler = torchvision.ops.MultiScaleRoIAlign(
-            featmap_names=["0", "1", "2", "3"],
-            output_size=7,
-            sampling_ratio=2,
-        )
-        mask_pooler = torchvision.ops.MultiScaleRoIAlign(
-            featmap_names=["0", "1", "2", "3"],
-            output_size=14,
-            sampling_ratio=2,
         )
         model = MaskRCNN(
             backbone=backbone,
             num_classes=num_classes,
             rpn_anchor_generator=anchor_generator,
-            # box_roi_pool=roi_pooler,
-            # mask_roi_pool=mask_pooler,
             min_size=img_size,
             max_size=img_size
         )
@@ -136,6 +123,77 @@ class LitMaskRCNN(L.LightningModule):
         # 3. Hard cap detections per image
         model.roi_heads.detections_per_img = 100
         return model
+
+    def split_decay(self, params):
+        decay = []
+        no_decay = []
+        for n, p in self.named_parameters():
+            if id(p) in params:
+                if p.ndim < 2 or "bias" in n or "norm" in n or "pos_embed" in n:
+                    no_decay.append(p)
+                else:
+                    decay.append(p)
+        return decay, no_decay
+
+    def get_tier_mapper(self):
+        """Maps backbone into thirds based on architecture type."""
+        arch = self.args.arch_type
+        # m = self.backbone
+
+        if "vit" == arch:
+            m = self.model.backbone.vit.vit.model
+            # ViT-Base: Tier 1 (0-3), Tier 2 (4-7), Tier 3 (8-11)
+            # Tier 1: patch_embed + blocks 0-3
+            tier1 = (list(m.patch_embed.parameters()) + list(m.blocks[:4].parameters()))
+            # Tier 2: blocks 4-7
+            tier2 = list(m.blocks[4:8].parameters())
+            # Tier 3: blocks 8-11
+            tier3 = list(m.blocks[8:].parameters())
+            return tier1, tier2, tier3
+        elif "swin" == arch:
+            m = self.model.backbone.body.body
+            # m.features[0] is PatchEmbed
+            # Tier 1: Stages 1 & 2 (indices 1 & 3) + PatchEmbed & downsampling (index 2)
+            tier1 = list(m.features[0].parameters()) + list(m.features[1].parameters()) + \
+                    list(m.features[2].parameters()) + list(m.features[3].parameters())
+            # Tier 2: Stage 3 (index 5) + downsampling (index 4)
+            tier2 = list(m.features[4].parameters()) + list(m.features[5].parameters())
+            # Tier 3: Stage 4 (index 7) + downsampling (index 6)
+            tier3 = list(m.features[6].parameters()) + list(m.features[7].parameters())
+            return tier1, tier2, tier3
+        elif "resnet" == arch:
+            m = self.model.backbone.body
+            # Tier 1: Layers 1 & 2 + initial stems
+            tier1 = list(m.conv1.parameters()) + list(m.bn1.parameters()) + list(m.layer1.parameters()) + \
+                    list(m.layer2.parameters())
+            # Tier 2: Layer 3
+            tier2 = list(m.layer3.parameters())
+            # Tier 3: Layer 4
+            tier3 = list(m.layer4.parameters())
+            return tier1, tier2, tier3
+
+    def on_train_epoch_start(self):
+        """Strategy 2: Gradual Unfreezing Implementation."""
+        if getattr(self.args, "strategy", None) != "gradual":
+            return
+
+        opt = self.optimizers()
+        lr = self.args.lr
+        t1, t2, t3 = self.get_tier_mapper()
+
+        # Unfreezing schedule (adjust epochs as needed)
+        if self.current_epoch == 5:  # 3
+            print(">>> Strategy: Gradual Unfreeze - Unfreezing Tier 3")
+            for p in t3: p.requires_grad = True
+            opt.param_groups[2]["lr"] = self.args.lr
+        elif self.current_epoch == 10:  # 6
+            print(">>> Strategy: Gradual Unfreeze - Unfreezing Tier 2")
+            for p in t2: p.requires_grad = True
+            opt.param_groups[1]["lr"] = self.args.lr
+        elif self.current_epoch == 15:  # 9
+            print(">>> Strategy: Gradual Unfreeze - Unfreezing Tier 1")
+            for p in t1: p.requires_grad = True
+            opt.param_groups[0]["lr"] = self.args.lr
 
     def configure_optimizers(self):
         params = [p for p in self.model.parameters() if p.requires_grad]
@@ -177,33 +235,17 @@ class LitMaskRCNN(L.LightningModule):
         }
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset,
-                          num_workers=self.num_workers,
-                          batch_size=self.batch_size,
-                          pin_memory=True,
-                          persistent_workers=True,
-                          shuffle=True,
-                          drop_last=True,
-                          collate_fn=collate_fn)
+        return DataLoader(self.train_dataset, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=True,
+                          persistent_workers=True, shuffle=True, drop_last=True, collate_fn=collate_fn)
 
     def val_dataloader(self):
-        return DataLoader(dataset=self.val_dataset,
-                          sampler=self.val_sampler,
-                          batch_size=self.batch_size,
-                          num_workers=self.num_workers,
-                          pin_memory=True,
-                          persistent_workers=False,
-                          drop_last=False,
+        return DataLoader(dataset=self.val_dataset, sampler=self.val_sampler, batch_size=self.batch_size,
+                          num_workers=self.num_workers, pin_memory=True, persistent_workers=False, drop_last=False,
                           collate_fn=collate_fn)
 
     def test_dataloader(self):
-        return DataLoader(dataset=self.test_dataset,
-                          sampler=self.test_sampler,
-                          batch_size=self.batch_size,
-                          num_workers=self.num_workers,
-                          pin_memory=True,
-                          persistent_workers=False,
-                          drop_last=False,
+        return DataLoader(dataset=self.test_dataset, sampler=self.test_sampler, batch_size=self.batch_size,
+                          num_workers=self.num_workers, pin_memory=True, persistent_workers=False, drop_last=False,
                           collate_fn=collate_fn)
 
     def training_step(self, batch, batch_idx):
@@ -216,12 +258,10 @@ class LitMaskRCNN(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         images, targets = batch
         outputs = self.model(images)
-
         for output in outputs:
             if "masks" in output:
                 # Thresholding (at 0.5) to convert float probs to bool,
                 output["masks"] = (output["masks"] > 0.5).squeeze(1).to(torch.uint8)
-
         self.val_map_bbox.update(outputs, targets)
         return outputs
 
@@ -248,7 +288,6 @@ class LitMaskRCNN(L.LightningModule):
         self.log("test/bbox_mAP", bbox_results["map"], prog_bar=True)
         self.log("test/bbox_mAP_50", bbox_results["map_50"])
         self.log("test/bbox_mAP_small", bbox_results["map_small"])
-
         self.log("test/mask_mAP", segm_results["map"], prog_bar=True)
         self.log("test/mask_mAP_50", segm_results["map_50"])
         self.log("test/mask_mAP_small", segm_results["map_small"])
@@ -273,33 +312,18 @@ class LitMaskRCNN(L.LightningModule):
 
     def save_inference_image(self, img_tensor, pred, save_path, threshold=0.5):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
         img_uint8 = (img_tensor.cpu().clamp(0, 1) * 255).byte()
-
         scores = pred["scores"]
         keep = scores > threshold
 
         boxes = pred["boxes"][keep]
         masks = pred["masks"][keep].squeeze(1) > 0.5 if "masks" in pred else None
-        labels = pred["labels"][keep]
 
         result_img = img_uint8
-
         if boxes.numel() > 0:
-            result_img = draw_bounding_boxes(
-                result_img,
-                boxes,
-                colors="red",
-                width=3,
-            )
-
+            result_img = draw_bounding_boxes(result_img, boxes, colors="red", width=3 )
             if masks is not None and masks.any():
-                result_img = draw_segmentation_masks(
-                    result_img,
-                    masks,
-                    alpha=0.5,
-                    colors="blue",
-                )
+                result_img = draw_segmentation_masks(result_img, masks, alpha=0.5, colors="blue" )
         # ALWAYS save (even if no detections)
         write_png(result_img, save_path)
         print(f"Saved inference image to: {save_path}")
@@ -317,23 +341,22 @@ def main(args):
             backbone_with_fpn.vit.load_checkpoint(args.ckpt_path)
         if args.use_lora:
             backbone_with_fpn.vit.apply_lora(args.lora_rank)
-            args.freeze_backbone = False  # this is automatically done in .apply_lora and is not needed
-        if args.freeze_backbone:
-            backbone_with_fpn.vit.freeze_parameters()
+            # args.freeze_backbone = False  # this is automatically done in .apply_lora and is not needed
+        # if args.freeze_backbone:
+        #     backbone_with_fpn.vit.freeze_parameters()
     elif args.arch_type == 'swin':
-        swin = TorchvisionSwinV2Backbone(
+        swin = AltTorchvisionSwinV2Backbone(
             checkpoint_path=args.ckpt_path if args.use_pretrained else None
         )
-        if args.freeze_backbone:
-            swin.freeze_parameters()
+        # if args.freeze_backbone:
+        #     swin.freeze_parameters()
         backbone_with_fpn = BackboneWithFPN(body=swin)
-
     elif args.arch_type == 'resnet':
-        resnet50 = ResNet50Backbone(
+        resnet50 = AltTorchvisionResNet50Backbone(
             checkpoint_path=args.ckpt_path if args.use_pretrained else None
         )
-        if args.freeze_backbone:
-            resnet50.freeze_parameters()
+        # if args.freeze_backbone:
+        #     resnet50.freeze_parameters()
         backbone_with_fpn = BackboneWithFPN(body=resnet50)
     else:
         print("Please choose the correct backbone.")
@@ -377,10 +400,10 @@ def main(args):
         logger=logger,
         precision="16-mixed",
         check_val_every_n_epoch=3,
-        # limit_train_batches=10,
-        # limit_val_batches=10,
-        # limit_test_batches=10,
-        log_every_n_steps=50
+        limit_train_batches=2,
+        limit_val_batches=2,
+        limit_test_batches=2,
+        log_every_n_steps=1
     )
 
     trainer.fit(model=lightning_maskrcnn)
@@ -388,29 +411,30 @@ def main(args):
 
 
 if __name__ == '__main__':
-    # args = DotDict(
-    #     num_classes=3,
-    #     num_workers=8,
-    #     batch_size=1,
-    #     lr=1e-4,
-    #     weight_decay=0.05,
-    #     warmup_steps=10000,
-    #     use_lora=False,
-    #     lora_rank=4,
-    #     use_pretrained=True,
-    #     ckpt_path="/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth",
-    #     # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
-    #     # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
-    #     # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
-    #     freeze_backbone=True,
-    #     data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
-    #     output_dir="./experiments/exp_frozen_backbone/",
-    #     candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
-    #     train_folds=[0],  # [0, 1, 2, 3]
-    #     val_folds=[4],
-    #     max_epochs=3,
-    #     img_size=1024,
-    #     arch_type="swin"
-    # )
-    args = get_args()
+    args = DotDict(
+        num_classes=3,
+        num_workers=8,
+        batch_size=1,
+        lr=1e-4,
+        weight_decay=0.05,
+        warmup_steps=10000,
+        use_lora=False,
+        lora_rank=4,
+        use_pretrained=True,
+        ckpt_path="/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth",
+        # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
+        # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
+        # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
+        freeze_backbone=True,
+        data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
+        output_dir="./experiments/exp_frozen_backbone/",
+        candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
+        train_folds=[0],  # [0, 1, 2, 3]
+        val_folds=[4],
+        max_epochs=20,
+        img_size=1024,
+        strategy='gradual',
+        arch_type="swin"
+    )
+    # args = get_args()
     main(args)

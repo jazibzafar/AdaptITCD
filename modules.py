@@ -245,6 +245,64 @@ class ResNet50Backbone(nn.Module):
         return self.body(x)
 
 
+class AltTorchvisionResNet50Backbone(nn.Module):
+    def __init__(self, checkpoint_path=None):
+        super().__init__()
+
+        self.body = resnet50(weights=None)
+
+        if checkpoint_path:
+            state_dict = torch.load(checkpoint_path, map_location="cpu")
+            state_dict = model_replace_prefix(state_dict, "", "backbone.body.")
+            missing, unexpected = self.body.load_state_dict(state_dict, strict=False)
+            print(f"Custom weights loaded from {checkpoint_path}")
+            print("Missing keys:", missing)
+            print("Unexpected keys:", unexpected)
+
+        # Stem
+        self.conv1 = self.body.conv1
+        self.bn1 = self.body.bn1
+        self.relu = self.body.relu
+        self.maxpool = self.body.maxpool
+
+        # ResNet stages
+        self.layer1 = self.body.layer1  # C2
+        self.layer2 = self.body.layer2  # C3
+        self.layer3 = self.body.layer3  # C4
+        self.layer4 = self.body.layer4  # C5
+
+        # FPN channel sizes for ResNet50
+        self.out_channels = [256, 512, 1024, 2048]
+
+    def freeze_parameters(self):
+        for param in self.body.parameters():
+            param.requires_grad = False
+
+    def forward(self, x):
+        outputs = {}
+
+        # Stem
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        # Stages
+        x = self.layer1(x)
+        outputs["0"] = x   # C2
+
+        x = self.layer2(x)
+        outputs["1"] = x   # C3
+
+        x = self.layer3(x)
+        outputs["2"] = x   # C4
+
+        x = self.layer4(x)
+        outputs["3"] = x   # C5
+
+        return outputs
+
+
 class TorchvisionSwinV2Backbone(nn.Module):
     def __init__(self, checkpoint_path=None):
         super().__init__()
@@ -280,6 +338,49 @@ class TorchvisionSwinV2Backbone(nn.Module):
         for k in out:
             out[k] = out[k].permute(0, 3, 1, 2).contiguous()
         return out
+
+
+class AltTorchvisionSwinV2Backbone(nn.Module):
+    def __init__(self, checkpoint_path=None):
+        super().__init__()
+
+        self.body = swin_v2_b(weights=None)
+        if checkpoint_path:
+            state_dict = torch.load(checkpoint_path, map_location='cpu')
+            state_dict = model_replace_prefix(state_dict, "", "backbone.backbone.")
+            missing, unexpected = self.body.load_state_dict(state_dict, strict=False)
+            print(f"Custom weights loaded from {checkpoint_path}")
+            print("Missing keys:", missing)
+            print("Unexpected keys:", unexpected)
+
+        # We only need the hierarchical features
+        self.features = self.body.features
+        # Channels for FPN
+        self.out_channels = [128, 256, 512, 1024]
+
+    def freeze_parameters(self):
+        for param in self.body.parameters():
+            param.requires_grad = False
+
+    def forward(self, x):
+        x = self.features[0](x)
+        x = self.features[1](x)
+        out0 = x
+        x = self.features[2](x)
+        x = self.features[3](x)
+        out1 = x
+        x = self.features[4](x)
+        x = self.features[5](x)
+        out2 = x
+        x = self.features[6](x)
+        x = self.features[7](x)
+        out3 = x
+        return {
+            "0": out0.permute(0, 3, 1, 2),
+            "1": out1.permute(0, 3, 1, 2),
+            "2": out2.permute(0, 3, 1, 2),
+            "3": out3.permute(0, 3, 1, 2),
+        }
 
 
 class BackboneWithFPN(nn.Module):
