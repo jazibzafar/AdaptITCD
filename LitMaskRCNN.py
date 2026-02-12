@@ -14,6 +14,7 @@ from modules import ViTDetBackbone, TorchvisionSwinV2Backbone, ResNet50Backbone,
 from modules import AltTorchvisionResNet50Backbone, AltTorchvisionSwinV2Backbone
 from dataset import OAMTCDCOCODataset
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
+from lightning.pytorch.callbacks.finetuning import BaseFinetuning
 from lightning.pytorch.loggers import TensorBoardLogger
 from torchvision.utils import draw_bounding_boxes, draw_segmentation_masks
 from torchvision.io import write_png
@@ -71,6 +72,52 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
+class GradualUnfreezing(BaseFinetuning):
+    def __init__(self, backbone_type: str, base_lr: float = 1e-4, stages=(5, 10, 15)):
+        super().__init__()
+        self.backbone_type = backbone_type
+        self.base_lr = base_lr
+        self.stages = stages
+
+    def freeze_before_training(self, pl_module):
+        # Freeze backbone completely
+        self.freeze(pl_module.backbone)
+        # Make sure RPN + ROI heads train
+        self.make_trainable(pl_module.rpn)
+        self.make_trainable(pl_module.roi_heads)
+
+    def finetune_function(self, pl_module, epoch, optimizer):
+        if epoch == self.stages[0]:
+            if self.backbone_type == "resnet":
+                self._unfreeze_and_add(pl_module.backbone.layer4, optimizer)
+            elif self.backbone_type == "swin":
+                self._unfreeze_and_add(pl_module.backbone.features[6], optimizer)
+                self._unfreeze_and_add(pl_module.backbone.features[7], optimizer)
+            elif self.backbone_type == "vit":
+                for i in range(8, 12):
+                    self._unfreeze_and_add(pl_module.backbone.blocks[i], optimizer)
+
+        if epoch == self.stages[1]:
+            if self.backbone_type == "resnet":
+                self._unfreeze_and_add(pl_module.backbone.layer3, optimizer)
+            elif self.backbone_type == "swin":
+                self._unfreeze_and_add(pl_module.backbone.features[4], optimizer)
+                self._unfreeze_and_add(pl_module.backbone.features[5], optimizer)
+            elif self.backbone_type == "vit":
+                for i in range(4, 8):
+                    self._unfreeze_and_add(pl_module.backbone.blocks[i], optimizer)
+
+        if epoch == self.stages[2]:
+            self.unfreeze_and_add_param_group(pl_module.backbone, optimizer)
+
+    def _unfreeze_and_add(self, module, optimizer):
+        self.unfreeze_and_add_param_group(
+            module,
+            optimizer,
+            lr=self.base_lr  # * 0.1  # backbone LR lower than head
+        )
+
+
 class LitMaskRCNN(L.LightningModule):
     def __init__(self, backbone, train_dataset, val_dataset, test_dataset, args):
         super().__init__()
@@ -101,6 +148,24 @@ class LitMaskRCNN(L.LightningModule):
         self.test_map_bbox = MeanAveragePrecision(iou_type="bbox")
         self.test_map_segm = MeanAveragePrecision(iou_type="segm")
         self.candidate_path = self.args.candidate_path
+
+    @property
+    def rpn(self):
+        return self.model.rpn
+
+    @property
+    def roi_heads(self):
+        return self.model.roi_heads
+
+    @property
+    def backbone(self):
+        arch = self.args.arch_type
+        if arch == 'vit':
+            return self.model.backbone.vit.vit.model
+        elif arch == 'swin':
+            return self.model.backbone.body.body
+        else:  # resnet
+            return self.model.backbone.body
 
     @staticmethod
     def build_mask_rcnn(backbone, num_classes, img_size):
@@ -180,31 +245,7 @@ class LitMaskRCNN(L.LightningModule):
             for p in tier3: p.requires_grad = True
             return tier1, tier2, tier3
 
-    def on_train_epoch_start(self):
-        """Strategy 2: Gradual Unfreezing Implementation."""
-        if getattr(self.args, "strategy", None) != "gradual":
-            return
-
-        opt = self.optimizers()
-        lr = self.args.lr
-        t1, t2, t3 = self.get_tier_mapper()
-
-        # Unfreezing schedule (adjust epochs as needed)
-        if self.current_epoch == 5:  # 3
-            print(">>> Strategy: Gradual Unfreeze - Unfreezing Tier 3")
-            for p in t3: p.requires_grad = True
-            opt.param_groups[2]["lr"] = self.args.lr
-        elif self.current_epoch == 10:  # 6
-            print(">>> Strategy: Gradual Unfreeze - Unfreezing Tier 2")
-            for p in t2: p.requires_grad = True
-            opt.param_groups[1]["lr"] = self.args.lr
-        elif self.current_epoch == 15:  # 9
-            print(">>> Strategy: Gradual Unfreeze - Unfreezing Tier 1")
-            for p in t1: p.requires_grad = True
-            opt.param_groups[0]["lr"] = self.args.lr
-
     def configure_optimizers(self):
-        # params = [p for p in self.model.parameters() if p.requires_grad]
         lr = self.args.lr
         wd = self.args.weight_decay
 
@@ -223,7 +264,8 @@ class LitMaskRCNN(L.LightningModule):
                 {'params': tier_3, 'lr': lr * 0.50, 'weight_decay': wd},
                 {'params': head_params, 'lr': lr, 'weight_decay': wd}
             ]
-        elif self.strategy in ['frozen', 'full']:
+            optimizer = torch.optim.AdamW(param_groups, lr=lr)
+        elif self.args.strategy in ['frozen', 'full']:
             decay_params = []
             no_decay_params = []
             for n, p in self.named_parameters():
@@ -237,11 +279,13 @@ class LitMaskRCNN(L.LightningModule):
                     {'params': decay_params, 'weight_decay': wd},
                     {'params': no_decay_params, 'weight_decay': 0.0}
                 ]
+                optimizer = torch.optim.AdamW(param_groups, lr=lr)
         else:  # gradual unfreezing
-            # TODO: Gradual unfreezing To be Implemented
-            dummy_variable = 0
-
-        optimizer = torch.optim.AdamW(param_groups, lr=lr)
+            optimizer = torch.optim.AdamW(
+                filter(lambda p: p.requires_grad, self.parameters()),
+                lr=lr,
+                weight_decay=wd
+            )
 
         total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = self.args.warmup_steps
@@ -422,11 +466,17 @@ def main(args):
     )
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
+    callback_list = [checkpoint_callback, early_stop_callback, lr_monitor]
+
+    if args.strategy == 'gradual':
+        finetune_cb = GradualUnfreezing(backbone_type=args.arch_type, base_lr=args.lr)
+        callback_list.append(finetune_cb)
+
     trainer = L.Trainer(
         max_epochs=args.max_epochs,
         accelerator="gpu",
         devices=1,
-        callbacks=[checkpoint_callback, early_stop_callback, lr_monitor],
+        callbacks=callback_list,
         logger=logger,
         precision="16-mixed",
         check_val_every_n_epoch=5,
@@ -450,21 +500,21 @@ if __name__ == '__main__':
     #     warmup_steps=10,
     #     use_lora=False,
     #     lora_rank=4,
-    #     use_pretrained=True,
+    #     use_pretrained=False,
     #     ckpt_path="/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt",
     #     # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
     #     # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
     #     # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
     #     freeze_backbone=True,
     #     data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
-    #     output_dir="./experiments/exp_adaptive/",
+    #     output_dir="./experiments/exp_gradual/",
     #     candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
     #     train_folds=[0],  # [0, 1, 2, 3]
     #     val_folds=[4],
-    #     max_epochs=100,
+    #     max_epochs=20,
     #     img_size=1024,
-    #     strategy='adaptive',
-    #     arch_type="resnet"
+    #     strategy='gradual',
+    #     arch_type="vit"
     # )
     args = get_args()
     main(args)
