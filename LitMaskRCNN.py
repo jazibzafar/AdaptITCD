@@ -90,7 +90,7 @@ class LitMaskRCNN(L.LightningModule):
         self.num_workers = self.args.num_workers
 
         self.model = self.build_mask_rcnn(self.backbone, self.args.num_classes, self.args.img_size)
-        if getattr(self.args, "strategy", None) == "gradual" or "frozen":
+        if self.args.strategy in ["gradual", "frozen"]:
             if self.args.arch_type == "vit":
                 for param in self.model.backbone.vit.vit.parameters():
                     param.requires_grad = False
@@ -145,10 +145,13 @@ class LitMaskRCNN(L.LightningModule):
             # ViT-Base: Tier 1 (0-3), Tier 2 (4-7), Tier 3 (8-11)
             # Tier 1: patch_embed + blocks 0-3
             tier1 = (list(m.patch_embed.parameters()) + list(m.blocks[:4].parameters()))
+            for p in tier1: p.requires_grad = True
             # Tier 2: blocks 4-7
             tier2 = list(m.blocks[4:8].parameters())
+            for p in tier2: p.requires_grad = True
             # Tier 3: blocks 8-11
             tier3 = list(m.blocks[8:].parameters())
+            for p in tier3: p.requires_grad = True
             return tier1, tier2, tier3
         elif "swin" == arch:
             m = self.model.backbone.body.body
@@ -156,20 +159,26 @@ class LitMaskRCNN(L.LightningModule):
             # Tier 1: Stages 1 & 2 (indices 1 & 3) + PatchEmbed & downsampling (index 2)
             tier1 = list(m.features[0].parameters()) + list(m.features[1].parameters()) + \
                     list(m.features[2].parameters()) + list(m.features[3].parameters())
+            for p in tier1: p.requires_grad = True
             # Tier 2: Stage 3 (index 5) + downsampling (index 4)
             tier2 = list(m.features[4].parameters()) + list(m.features[5].parameters())
+            for p in tier2: p.requires_grad = True
             # Tier 3: Stage 4 (index 7) + downsampling (index 6)
             tier3 = list(m.features[6].parameters()) + list(m.features[7].parameters())
+            for p in tier3: p.requires_grad = True
             return tier1, tier2, tier3
         elif "resnet" == arch:
             m = self.model.backbone.body
             # Tier 1: Layers 1 & 2 + initial stems
             tier1 = list(m.conv1.parameters()) + list(m.bn1.parameters()) + list(m.layer1.parameters()) + \
                     list(m.layer2.parameters())
+            for p in tier1: p.requires_grad = True
             # Tier 2: Layer 3
             tier2 = list(m.layer3.parameters())
+            for p in tier2: p.requires_grad = True
             # Tier 3: Layer 4
             tier3 = list(m.layer4.parameters())
+            for p in tier3: p.requires_grad = True
             return tier1, tier2, tier3
 
     def on_train_epoch_start(self):
@@ -196,22 +205,44 @@ class LitMaskRCNN(L.LightningModule):
             opt.param_groups[0]["lr"] = self.args.lr
 
     def configure_optimizers(self):
-        params = [p for p in self.model.parameters() if p.requires_grad]
+        # params = [p for p in self.model.parameters() if p.requires_grad]
+        lr = self.args.lr
+        wd = self.args.weight_decay
 
-        decay_params = []
-        no_decay_params = []
-        for n, p in self.named_parameters():
-            if not p.requires_grad:
-                continue
-            if p.ndim < 2 or "bias" in n or "norm" in n or "pos_embed" in n:
-                no_decay_params.append(p)
-            else:
-                decay_params.append(p)
+        if self.args.arch_type == 'vit':
+            body_params = set(id(p) for p in self.model.backbone.vit.vit.parameters())
+        else:
+            body_params = set(id(p) for p in self.model.backbone.body.parameters())
+        # Remember Neck/FPN params do not change and are part of head params
+        head_params = [p for p in self.model.parameters() if id(p) not in body_params and p.requires_grad]
 
-        optimizer = torch.optim.AdamW([
-            {'params': decay_params, 'weight_decay': self.args.weight_decay},
-            {'params': no_decay_params, 'weight_decay': 0.0}
-        ], lr=self.args.lr)
+        if self.args.strategy == 'adaptive':
+            tier_1, tier_2, tier_3 = self.get_tier_mapper()
+            param_groups = [
+                {'params': tier_1, 'lr': lr * 0.125, 'weight_decay': wd},
+                {'params': tier_2, 'lr': lr * 0.25, 'weight_decay': wd},
+                {'params': tier_3, 'lr': lr * 0.50, 'weight_decay': wd},
+                {'params': head_params, 'lr': lr, 'weight_decay': wd}
+            ]
+        elif self.strategy in ['frozen', 'full']:
+            decay_params = []
+            no_decay_params = []
+            for n, p in self.named_parameters():
+                if not p.requires_grad:
+                    continue
+                if p.ndim < 2 or "bias" in n or "norm" in n or "pos_embed" in n:
+                    no_decay_params.append(p)
+                else:
+                    decay_params.append(p)
+                param_groups = [
+                    {'params': decay_params, 'weight_decay': wd},
+                    {'params': no_decay_params, 'weight_decay': 0.0}
+                ]
+        else:  # gradual unfreezing
+            # TODO: Gradual unfreezing To be Implemented
+            dummy_variable = 0
+
+        optimizer = torch.optim.AdamW(param_groups, lr=lr)
 
         total_steps = self.trainer.estimated_stepping_batches
         warmup_steps = self.args.warmup_steps
@@ -399,8 +430,8 @@ def main(args):
         callbacks=[checkpoint_callback, early_stop_callback, lr_monitor],
         logger=logger,
         precision="16-mixed",
-        check_val_every_n_epoch=3,
-        limit_train_batches=2,
+        check_val_every_n_epoch=50,
+        limit_train_batches=10,
         limit_val_batches=2,
         limit_test_batches=2,
         log_every_n_steps=1
@@ -416,25 +447,25 @@ if __name__ == '__main__':
         num_workers=8,
         batch_size=1,
         lr=1e-4,
-        weight_decay=0.05,
-        warmup_steps=10000,
+        weight_decay=0.001,
+        warmup_steps=10,
         use_lora=False,
         lora_rank=4,
         use_pretrained=True,
-        ckpt_path="/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth",
+        ckpt_path="/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt",
         # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
         # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
         # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
         freeze_backbone=True,
         data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
-        output_dir="./experiments/exp_frozen_backbone/",
+        output_dir="./experiments/exp_adaptive/",
         candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
         train_folds=[0],  # [0, 1, 2, 3]
         val_folds=[4],
-        max_epochs=20,
+        max_epochs=100,
         img_size=1024,
-        strategy='gradual',
-        arch_type="swin"
+        strategy='adaptive',
+        arch_type="resnet"
     )
     # args = get_args()
     main(args)
