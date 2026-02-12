@@ -24,7 +24,6 @@ import argparse
 import sys
 
 
-
 def get_args():
     parser = argparse.ArgumentParser(description="Training configuration")
 
@@ -430,11 +429,11 @@ def main(args):
         callbacks=[checkpoint_callback, early_stop_callback, lr_monitor],
         logger=logger,
         precision="16-mixed",
-        check_val_every_n_epoch=50,
-        limit_train_batches=10,
-        limit_val_batches=2,
-        limit_test_batches=2,
-        log_every_n_steps=1
+        check_val_every_n_epoch=5,
+        # limit_train_batches=10,
+        # limit_val_batches=2,
+        # limit_test_batches=2,
+        log_every_n_steps=50
     )
 
     trainer.fit(model=lightning_maskrcnn)
@@ -442,30 +441,30 @@ def main(args):
 
 
 if __name__ == '__main__':
-    args = DotDict(
-        num_classes=3,
-        num_workers=8,
-        batch_size=1,
-        lr=1e-4,
-        weight_decay=0.001,
-        warmup_steps=10,
-        use_lora=False,
-        lora_rank=4,
-        use_pretrained=True,
-        ckpt_path="/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt",
-        # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
-        # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
-        # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
-        freeze_backbone=True,
-        data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
-        output_dir="./experiments/exp_adaptive/",
-        candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
-        train_folds=[0],  # [0, 1, 2, 3]
-        val_folds=[4],
-        max_epochs=100,
-        img_size=1024,
-        strategy='adaptive',
-        arch_type="resnet"
-    )
-    # args = get_args()
+    # args = DotDict(
+    #     num_classes=3,
+    #     num_workers=8,
+    #     batch_size=1,
+    #     lr=1e-4,
+    #     weight_decay=0.001,
+    #     warmup_steps=10,
+    #     use_lora=False,
+    #     lora_rank=4,
+    #     use_pretrained=True,
+    #     ckpt_path="/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt",
+    #     # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
+    #     # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
+    #     # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
+    #     freeze_backbone=True,
+    #     data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
+    #     output_dir="./experiments/exp_adaptive/",
+    #     candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
+    #     train_folds=[0],  # [0, 1, 2, 3]
+    #     val_folds=[4],
+    #     max_epochs=100,
+    #     img_size=1024,
+    #     strategy='adaptive',
+    #     arch_type="resnet"
+    # )
+    args = get_args()
     main(args)
