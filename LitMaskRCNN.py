@@ -298,7 +298,7 @@ class LitMaskRCNN(L.LightningModule):
 
     def on_validation_epoch_end(self):
         bbox_results = self.val_map_bbox.compute()
-        self.log("val/bbox_mAP", bbox_results["map"], prog_bar=True)
+        self.log("val/bbox_mAP_50", bbox_results["map_50"], prog_bar=True)
         self.val_map_bbox.reset()
 
     def test_step(self, batch, batch_idx):
@@ -416,7 +416,7 @@ def main(args):
                                default_hp_metric=False)
 
     early_stop_callback = EarlyStopping(
-        monitor="val/bbox_mAP",
+        monitor="val/bbox_mAP_50",
         patience=3,
         verbose=True,
         mode="max"
