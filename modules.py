@@ -7,7 +7,7 @@ from torchvision.models.feature_extraction import create_feature_extractor
 from torchvision.ops.feature_pyramid_network import FeaturePyramidNetwork, LastLevelMaxPool
 from torchvision.models import swin_v2_b
 from torchvision.models import resnet50
-from utils import model_replace_prefix
+from utils import model_replace_prefix, count_params
 
 
 def freeze_except_lora(model):
@@ -178,6 +178,7 @@ class ViTBackbone(nn.Module):
         self.vit = LoRA.from_module(self.vit, rank=lora_rank)
         freeze_except_lora(self.vit)
         print("LoRA wrapping applied and non-LoRA params frozen")
+        print(f"trainable params: {count_params(self.vit)}")
 
     def freeze_parameters(self):
         for param in self.vit.parameters():
@@ -213,7 +214,7 @@ class ViTDetBackbone(nn.Module):
 
 
 class ResNet50Backbone(nn.Module):
-    def __init__(self, checkpoint_path=None):
+    def __init__(self, checkpoint_path=None, apply_lora=False, lora_rank=4):
         super().__init__()
         # 1. Load the base ResNet50
         # weights=None if loading a full custom state_dict
@@ -235,6 +236,12 @@ class ResNet50Backbone(nn.Module):
 
         # ResNet50 out_channels for these layers are [256, 512, 1024, 2048]
         self.body = create_feature_extractor(base_model, return_nodes=return_nodes)
+        if apply_lora:
+            self.body = LoRA.from_module(self.body, rank=lora_rank)
+            freeze_except_lora(self.body)
+            print("LoRA wrapping applied and non-LoRA params frozen")
+            print(f"trainable params: {count_params(self.body)}")
+
         self.out_channels = [256, 512, 1024, 2048]
 
     def freeze_parameters(self):
@@ -304,7 +311,7 @@ class AltTorchvisionResNet50Backbone(nn.Module):
 
 
 class TorchvisionSwinV2Backbone(nn.Module):
-    def __init__(self, checkpoint_path=None):
+    def __init__(self, checkpoint_path=None, apply_lora=False, lora_rank=4):
         super().__init__()
         # 1. Initialize the base model
         # We use weights=None if you are loading a full custom state_dict
@@ -326,6 +333,12 @@ class TorchvisionSwinV2Backbone(nn.Module):
         }
 
         self.body = create_feature_extractor(base_model, return_nodes=return_nodes)
+        if apply_lora:
+            self.body = LoRA.from_module(self.body, rank=lora_rank)
+            freeze_except_lora(self.body)
+            print("LoRA wrapping applied and non-LoRA params frozen")
+            print(f"trainable params: {count_params(self.body)}")
+
         self.out_channels = [128, 256, 512, 1024]
 
     def freeze_parameters(self):
@@ -393,6 +406,13 @@ class BackboneWithFPN(nn.Module):
             # extra_blocks=LastLevelMaxPool(),
         )
         self.out_channels = 256
+
+    def apply_lora(self, lora_rank):
+        # Apply LoRA if requested
+        self.body = LoRA.from_module(self.body, rank=lora_rank)
+        freeze_except_lora(self.body)
+        print("LoRA wrapping applied and non-LoRA params frozen")
+        print(f"trainable params: {count_params(self.body)}")
 
     def forward(self, x):
         x = self.body(x)

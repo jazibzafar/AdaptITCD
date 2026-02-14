@@ -44,7 +44,7 @@ def get_args():
                         default="")
     # parser.add_argument("--freeze_backbone", action="store_true", default=False)
     parser.add_argument("--strategy", type=str,
-                        default="full", choices=["gradual", "adaptive", "frozen", "full"])
+                        default="full", choices=["gradual", "adaptive", "frozen", "full", "lora"])
     parser.add_argument("--data_path", type=str,
                         default="")
     parser.add_argument("--output_dir", type=str,
@@ -419,18 +419,28 @@ def main(args):
         # if args.freeze_backbone:
         #     backbone_with_fpn.vit.freeze_parameters()
     elif args.arch_type == 'swin':
-        swin = AltTorchvisionSwinV2Backbone(
-            checkpoint_path=args.ckpt_path if args.use_pretrained else None
-        )
-        # if args.freeze_backbone:
-        #     swin.freeze_parameters()
+        if not args.use_lora:
+            swin = AltTorchvisionSwinV2Backbone(
+                checkpoint_path=args.ckpt_path if args.use_pretrained else None
+            )
+        else:
+            swin = TorchvisionSwinV2Backbone(
+                checkpoint_path=args.ckpt_path if args.use_pretrained else None,
+                apply_lora=args.use_lora,
+                lora_rank=args.lora_rank
+            )
         backbone_with_fpn = BackboneWithFPN(body=swin)
     elif args.arch_type == 'resnet':
-        resnet50 = AltTorchvisionResNet50Backbone(
-            checkpoint_path=args.ckpt_path if args.use_pretrained else None
-        )
-        # if args.freeze_backbone:
-        #     resnet50.freeze_parameters()
+        if not args.use_lora:
+            resnet50 = AltTorchvisionResNet50Backbone(
+                checkpoint_path=args.ckpt_path if args.use_pretrained else None
+            )
+        else:
+            resnet50 = ResNet50Backbone(
+                checkpoint_path=args.ckpt_path if args.use_pretrained else None,
+                apply_lora=args.use_lora,
+                lora_rank=args.lora_rank
+            )
         backbone_with_fpn = BackboneWithFPN(body=resnet50)
     else:
         print("Please choose the correct backbone.")
@@ -480,9 +490,9 @@ def main(args):
         logger=logger,
         precision="16-mixed",
         check_val_every_n_epoch=5,
-        # limit_train_batches=10,
-        # limit_val_batches=2,
-        # limit_test_batches=2,
+        limit_train_batches=100,
+        limit_val_batches=2,
+        limit_test_batches=2,
         log_every_n_steps=50
     )
 
@@ -491,30 +501,30 @@ def main(args):
 
 
 if __name__ == '__main__':
-    # args = DotDict(
-    #     num_classes=3,
-    #     num_workers=8,
-    #     batch_size=1,
-    #     lr=1e-4,
-    #     weight_decay=0.001,
-    #     warmup_steps=10,
-    #     use_lora=False,
-    #     lora_rank=4,
-    #     use_pretrained=False,
-    #     ckpt_path="/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt",
-    #     # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
-    #     # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
-    #     # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
-    #     freeze_backbone=True,
-    #     data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
-    #     output_dir="./experiments/exp_gradual/",
-    #     candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
-    #     train_folds=[0],  # [0, 1, 2, 3]
-    #     val_folds=[4],
-    #     max_epochs=20,
-    #     img_size=1024,
-    #     strategy='gradual',
-    #     arch_type="vit"
-    # )
-    args = get_args()
+    args = DotDict(
+        num_classes=3,
+        num_workers=8,
+        batch_size=1,
+        lr=1e-4,
+        weight_decay=0.001,
+        warmup_steps=10,
+        use_lora=True,
+        lora_rank=8,
+        use_pretrained=True,
+        ckpt_path= "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth",
+        # swin: "/home/jazib/projects/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth"
+        # r50: "/home/jazib/projects/RSFMCheckpoints/DeepForest_R50.pt"
+        # vit: "/home/jazib/projects/savedmodels/meta_vitbase16_bench.pth"
+        freeze_backbone=True,
+        data_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/",
+        output_dir="./experiments/exp_gradual/",
+        candidate_path="/home/jazib/projects/data/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif",
+        train_folds=[0],  # [0, 1, 2, 3]
+        val_folds=[4],
+        max_epochs=20,
+        img_size=1024,
+        strategy='lora',
+        arch_type="swin"
+    )
+    # args = get_args()
     main(args)
