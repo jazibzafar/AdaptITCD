@@ -39,7 +39,7 @@ def get_args():
     parser.add_argument("--use_lora", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=4)
 
-    parser.add_argument("--use_pretrained", action="store_true", default=True)
+    parser.add_argument("--use_pretrained", action="store_true", default=False)
     parser.add_argument("--ckpt_path", type=str,
                         default="")
     # parser.add_argument("--freeze_backbone", action="store_true", default=False)
