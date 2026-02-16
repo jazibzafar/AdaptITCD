@@ -24,6 +24,8 @@ import torchvision.transforms.functional as F
 import argparse
 import sys
 
+torch.seed_everything(1234)  # 7890
+
 
 def get_args():
     parser = argparse.ArgumentParser(description="Training configuration")
