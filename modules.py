@@ -397,15 +397,15 @@ class AltTorchvisionSwinV2Backbone(nn.Module):
 
 
 class BackboneWithFPN(nn.Module):
-    def __init__(self, body):
+    def __init__(self, body, out_channels=256):
         super().__init__()
         self.body = body
         self.fpn = FeaturePyramidNetwork(
             in_channels_list=body.out_channels,
-            out_channels=256,
+            out_channels=out_channels,
             # extra_blocks=LastLevelMaxPool(),
         )
-        self.out_channels = 256
+        self.out_channels = out_channels
 
     def apply_lora(self, lora_rank):
         # Apply LoRA if requested

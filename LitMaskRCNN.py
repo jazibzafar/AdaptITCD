@@ -41,7 +41,7 @@ def get_args():
 
     parser.add_argument("--use_lora", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=4)
-
+    parser.add_argument("--fast", action="store_true", default=False)
     parser.add_argument("--use_pretrained", action="store_true", default=False)
     parser.add_argument("--ckpt_path", type=str,
                         default="")
@@ -138,7 +138,7 @@ class LitMaskRCNN(L.LightningModule):
         self.batch_size = self.args.batch_size
         self.num_workers = self.args.num_workers
 
-        self.model = self.build_mask_rcnn(self.backbone, self.args.num_classes, self.args.img_size)
+        self.model = self.build_mask_rcnn(self.backbone, self.args.num_classes, self.args.img_size, self.args.fast)
         if self.args.strategy in ["gradual", "frozen"]:
             if self.args.arch_type == "vit":
                 for param in self.model.backbone.vit.vit.parameters():
@@ -171,7 +171,7 @@ class LitMaskRCNN(L.LightningModule):
             return self.model.backbone.body
 
     @staticmethod
-    def build_mask_rcnn(backbone, num_classes, img_size):
+    def build_mask_rcnn(backbone, num_classes, img_size, fast=False):
         anchor_generator = AnchorGenerator(
             sizes=((32,), (64,), (128,), (256,)),
             aspect_ratios=((0.5, 1.0, 2.0),) * 4,
@@ -189,6 +189,10 @@ class LitMaskRCNN(L.LightningModule):
         model.roi_heads.nms_thresh = 0.3  # default ~0.5
         # 3. Hard cap detections per image
         model.roi_heads.detections_per_img = 100
+        if fast:
+            model.rpn_pre_nms_top_n_train = 1000
+            model.rpn_post_nms_top_n_train = 300
+            model.rpn_batch_size_per_image = 128
         return model
 
     def split_decay(self, params):
@@ -413,7 +417,8 @@ def main(args):
         f"Unsupported arch_type: {args.arch_type}"
     if args.arch_type == 'vit':
         backbone_with_fpn = ViTDetBackbone(
-            img_size=args.img_size
+            img_size=args.img_size,
+            out_channels=128 if args.fast else 256
         )
         if args.use_pretrained:
             backbone_with_fpn.vit.load_checkpoint(args.ckpt_path)
@@ -433,7 +438,8 @@ def main(args):
                 apply_lora=args.use_lora,
                 lora_rank=args.lora_rank
             )
-        backbone_with_fpn = BackboneWithFPN(body=swin)
+        backbone_with_fpn = BackboneWithFPN(body=swin,
+                                            out_channels=128 if args.fast else 256)
     elif args.arch_type == 'resnet':
         if not args.use_lora:
             resnet50 = AltTorchvisionResNet50Backbone(
