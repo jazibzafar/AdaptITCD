@@ -470,7 +470,6 @@ def main(args):
         backbone=backbone_with_fpn, train_dataset=train_dataset, val_dataset=val_dataset, test_dataset=test_dataset,
         args=args
     )
-
     checkpoint_callback = ModelCheckpoint(dirpath=args.output_dir,
                                           # every_n_epochs=int(args.max_epochs / 3),
                                           save_last=True)
