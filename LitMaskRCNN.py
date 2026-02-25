@@ -176,23 +176,36 @@ class LitMaskRCNN(L.LightningModule):
             sizes=((32,), (64,), (128,), (256,)),
             aspect_ratios=((0.5, 1.0, 2.0),) * 4,
         )
-        model = MaskRCNN(
-            backbone=backbone,
-            num_classes=num_classes,
-            rpn_anchor_generator=anchor_generator,
-            min_size=img_size,
-            max_size=img_size
-        )
-        # 1. Remove low-confidence detections
-        model.roi_heads.score_thresh = 0.5  # try 0.3–0.7
-        # 2. Stronger Non-Max Suppression
-        model.roi_heads.nms_thresh = 0.3  # default ~0.5
-        # 3. Hard cap detections per image
-        model.roi_heads.detections_per_img = 100
-        if fast:
-            model.rpn_pre_nms_top_n_train = 1000
-            model.rpn_post_nms_top_n_train = 300
-            model.rpn_batch_size_per_image = 128
+        if not fast:
+            model = MaskRCNN(
+                backbone=backbone,
+                num_classes=num_classes,
+                rpn_anchor_generator=anchor_generator,
+                min_size=img_size,
+                max_size=img_size
+            )
+        else:
+            model = MaskRCNN(
+                backbone=backbone,
+                num_classes=num_classes,
+                rpn_anchor_generator=anchor_generator,
+                min_size=img_size,
+                max_size=img_size,
+                rpn_pre_nms_top_n_train=1000,
+                rpn_post_nms_top_n_train=300,
+                rpn_batch_size_per_image=128,
+                box_batch_size_per_image=256
+            )
+        # # 1. Remove low-confidence detections
+        # model.roi_heads.score_thresh = 0.5  # try 0.3–0.7
+        # # 2. Stronger Non-Max Suppression
+        # model.roi_heads.nms_thresh = 0.3  # default ~0.5
+        # # 3. Hard cap detections per image
+        # model.roi_heads.detections_per_img = 100
+        # if fast:
+        #     model.rpn_pre_nms_top_n_train = 1000
+        #     model.rpn_post_nms_top_n_train = 300
+        #     model.rpn_batch_size_per_image = 128
         return model
 
     def split_decay(self, params):
