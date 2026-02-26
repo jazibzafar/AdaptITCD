@@ -182,7 +182,8 @@ class LitMaskRCNN(L.LightningModule):
                 num_classes=num_classes,
                 rpn_anchor_generator=anchor_generator,
                 min_size=img_size,
-                max_size=img_size
+                max_size=img_size,
+                box_detections_per_img=150
             )
         else:
             model = MaskRCNN(
@@ -194,7 +195,7 @@ class LitMaskRCNN(L.LightningModule):
                 rpn_pre_nms_top_n_train=1000,
                 rpn_post_nms_top_n_train=300,
                 rpn_batch_size_per_image=128,
-                box_batch_size_per_image=256
+                box_batch_size_per_image=256,
             )
         # # 1. Remove low-confidence detections
         # model.roi_heads.score_thresh = 0.5  # try 0.3–0.7
