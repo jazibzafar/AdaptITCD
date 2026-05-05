@@ -159,5 +159,6 @@ def get_train_transforms():
         #                            p=0.2),
         A.RandomGamma(gamma_limit=(100, 140), p=0.2),
         A.RandomToneCurve(scale=0.1, p=0.2),
+        A.Normalize(mean=0, std=1, max_pixel_value=255),
         ToTensorV2()
     ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))

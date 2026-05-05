@@ -12,7 +12,7 @@ from torch.optim import AdamW
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from modules import ViTDetBackbone, TorchvisionSwinV2Backbone, ResNet50Backbone, BackboneWithFPN
 from modules import AltTorchvisionResNet50Backbone, AltTorchvisionSwinV2Backbone
-from dataset import OAMTCDCOCODataset
+from dataset import OAMTCDCOCODataset, get_train_transforms
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 from lightning.pytorch.callbacks.finetuning import BaseFinetuning
 from lightning.pytorch.loggers import TensorBoardLogger
@@ -470,11 +470,14 @@ def main(args):
         print("Please choose the correct backbone.")
         sys.exit(1)
 
+    transform = get_train_transforms()
     train_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
                                       folds=args.train_folds,
+                                      transforms=transform,
                                       return_masks=True)
     val_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
                                     folds=args.val_folds,
+                                    transforms=transform,
                                     return_masks=True)
     test_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
                                      split='test',
