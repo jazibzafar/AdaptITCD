@@ -183,7 +183,7 @@ class LitMaskRCNN(L.LightningModule):
                 rpn_anchor_generator=anchor_generator,
                 min_size=img_size,
                 max_size=img_size,
-                box_detections_per_img=200
+                box_detections_per_img=150
             )
         else:
             model = MaskRCNN(
