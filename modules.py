@@ -8,6 +8,7 @@ from torchvision.ops.feature_pyramid_network import FeaturePyramidNetwork, LastL
 from torchvision.models import swin_v2_b
 from torchvision.models import resnet50
 from utils import model_replace_prefix, count_params
+from dinov3_convnext import ConvNeXt
 
 
 def freeze_except_lora(model):
@@ -394,6 +395,38 @@ class AltTorchvisionSwinV2Backbone(nn.Module):
             "2": out2.permute(0, 3, 1, 2),
             "3": out3.permute(0, 3, 1, 2),
         }
+
+
+class ConvNeXtBackbone(nn.Module):
+    def __init__(self, backbone_type='small', checkpoint_path=None):
+        super().__init__()
+        self.backbone_type = backbone_type
+        self.body_params = self.get_depth_and_dims(self.backbone_type)
+        self.body = ConvNeXt(**self.body_params)
+        self.depths = self.body_params['depths']
+        self.out_channels = self.body_params['dims']
+        self.feat_names = ['0', '1', '2', '3']
+        if checkpoint_path:
+            state_dict = torch.load(checkpoint_path, map_location='cpu')
+            self.body.load_state_dict(state_dict, strict=False)
+            print(f"ConvNext-{self.backbone_type} weights loaded from {checkpoint_path}")
+
+    @staticmethod
+    def get_depth_and_dims(backbone_type):
+        convnext_sizes = { "tiny": dict(depths=[3, 3, 9, 3], dims=[96, 192, 384, 768]),
+                           "small": dict(depths=[3, 3, 27, 3], dims=[96, 192, 384, 768]),
+                           "base": dict(depths=[3, 3, 27, 3], dims=[128, 256, 512, 1024]),
+                           "large": dict(depths=[3, 3, 27, 3], dims=[192, 384, 768, 1536])}
+        return convnext_sizes[backbone_type]
+
+    def freeze_parameters(self):
+        for param in self.body.parameters():
+            param.requires_grad = False
+
+    def forward(self, x):
+        output_tuple = self.body.get_intermediate_layers(x, n=4, reshape=True)
+        return {k: v for k, v in zip(self.feat_names, output_tuple)}
+
 
 
 class BackboneWithFPN(nn.Module):

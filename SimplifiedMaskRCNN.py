@@ -25,7 +25,7 @@ import argparse
 import sys
 
 # TODO: Move seed_everything to main.
-# TODO: Add seed options as args in dict form {s1: 1111, s2: 6147, s3: 4319}
+# TODO: Add seed options as args in dict form {s1: 1234, s2: 6147, s3: 4319}
 L.seed_everything(1234)
 
 
@@ -78,75 +78,6 @@ def get_args():
     parser.add_argument("--img_size", type=int, default=1024)
     parser.add_argument("--arch_type", type=str, default="")
     return parser.parse_args()
-
-
-class GradualUnfreezing(BaseFinetuning):
-    def __init__(self, backbone_type: str, stages=(5, 10, 15)):
-        super().__init__()
-        self.backbone_type = backbone_type
-        self.stages = stages
-
-    def freeze_before_training(self, pl_module):
-        # Freeze backbone completely
-        self.freeze(pl_module.backbone)
-        # Make sure RPN + ROI heads train
-        self.make_trainable(pl_module.rpn)
-        self.make_trainable(pl_module.roi_heads)
-
-    def finetune_function(self, pl_module, epoch, optimizer):
-        blocks = self._get_backbone_blocks(pl_module)
-        n = len(blocks)
-
-        if epoch == self.stages[0]:
-            # last 25%
-            for b in blocks[int(0.75 * n):]:
-                self.make_trainable(b)
-
-        if epoch == self.stages[1]:
-            # middle 25%
-            for b in blocks[int(0.5 * n):int(0.75 * n)]:
-                self.make_trainable(b)
-
-        if epoch == self.stages[2]:
-            # remaining 50%
-            for b in blocks[:int(0.5 * n)]:
-                self.make_trainable(b)
-
-    def _get_backbone_blocks(self, pl_module):
-        bt = self.backbone_type
-
-        if bt == "resnet":
-            layers = [
-                pl_module.backbone.layer1,
-                pl_module.backbone.layer2,
-                pl_module.backbone.layer3,
-                pl_module.backbone.layer4,
-            ]
-            blocks = []
-            for l in layers:
-                blocks.extend(list(l))
-            return blocks
-        elif bt == "vit":
-            return list(pl_module.backbone.blocks)
-        elif bt == "swin":
-            blocks = []
-            for stage in pl_module.backbone.features:
-                if hasattr(stage, "blocks"):
-                    blocks.extend(stage.blocks)
-                else:
-                    blocks.append(stage)
-            return blocks
-        elif bt == "convnext":
-            # TODO: Needs to be redone
-            blocks = []
-            for stage in pl_module.backbone.features:
-                if hasattr(stage, "__iter__"):
-                    blocks.extend(list(stage))
-                else:
-                    blocks.append(stage)
-            return blocks
-        else:
-            raise ValueError(f"Unsupported backbone: {bt}")
 
 
 class LitMaskRCNN(L.LightningModule):
