@@ -236,7 +236,6 @@ class LitMaskRCNN(L.LightningModule):
         self.test_map_bbox.reset()
         self.test_map_segm.reset()
 
-        # Print a nice summary to the console
         print("\n" + "=" * 30)
         print(f"FINAL TEST MASK mAP: {segm_results['map']:.4f}")
         print(f"FINAL TEST BBOX mAP: {bbox_results['map']:.4f}")
