@@ -42,7 +42,7 @@ def collate_fn(batch):
 # TODO: For checkpoints, instead of giving it as an argument use a dict with key: arch_type, value: ckpt path
 # TODO: Remove the use_pretrained flag since we're not doing supervised
 # TODO: remove use_lora flag as it should be a strategy
-# TODO: change strategy choices to ['gradualLLRD', 'full', 'frozen', 'lora', 'lora_llrd']
+# TODO: change strategy choices to ['full', 'frozen', 'lora']
 # TODO: add the seed arg
 # TODO: remove fast option
 # TODO: add lr_decay arg with default 0.75
@@ -90,45 +90,20 @@ class LitMaskRCNN(L.LightningModule):
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.test_dataset = test_dataset
-        self.train_sampler = RandomSampler(self.train_dataset)
-        self.val_sampler = SequentialSampler(self.val_dataset)
-        self.test_sampler = SequentialSampler(self.test_dataset)
+        # self.train_sampler = RandomSampler(self.train_dataset)
+        # self.val_sampler = SequentialSampler(self.val_dataset)
+        # self.test_sampler = SequentialSampler(self.test_dataset)
 
         self.batch_size = self.args.batch_size
         self.num_workers = self.args.num_workers
 
         self.model = self.build_mask_rcnn(self.backbone, self.args.num_classes, self.args.img_size, self.args.fast)
-        if self.args.strategy in ["gradual", "frozen"]:
-            if self.args.arch_type == "vit":
-                for param in self.model.backbone.vit.vit.parameters():
-                    param.requires_grad = False
-            else:
-                for param in self.model.backbone.body.parameters():
-                    param.requires_grad = False
+        self.configure_training_strategy()
 
         self.val_map_bbox = MeanAveragePrecision(iou_type="bbox")
         self.test_map_bbox = MeanAveragePrecision(iou_type="bbox")
         self.test_map_segm = MeanAveragePrecision(iou_type="segm")
         self.candidate_path = self.args.candidate_path
-
-    @property
-    def rpn(self):
-        return self.model.rpn
-
-    @property
-    def roi_heads(self):
-        return self.model.roi_heads
-
-    @property
-    def backbone(self):
-        # TODO: Add ConvNext support
-        arch = self.args.arch_type
-        if arch == 'vit':
-            return self.model.backbone.vit.vit.model
-        elif arch == 'swin':
-            return self.model.backbone.body.body
-        else:  # resnet
-            return self.model.backbone.body
 
     @staticmethod
     def build_mask_rcnn(backbone, num_classes, img_size):
@@ -147,33 +122,135 @@ class LitMaskRCNN(L.LightningModule):
         )
         return model
 
-    def split_decay(self, params):
-        decay = []
-        no_decay = []
-        for n, p in self.model.named_parameters():
-            if id(p) in params:
-                if p.ndim == 1 or "bias" in n or "norm" in n or "pos_embed" in n:
-                    no_decay.append(p)
-                else:
-                    decay.append(p)
-        return decay, no_decay
+    @staticmethod
+    def no_weight_decay(name, param):
+        # 1D params (biases and norm scales) never get weight decay
+        if param.ndim <= 1:
+            return True
+        # Consolidate keywords; name.lower() handled once
+        keywords = {
+            "norm", "bn", "ln", "gn",  # Normalization
+            "pos_embed", "position_embedding",  # Positional Info
+            "rel_pos", "relative_position",  # Swin/ViT variants
+            "cls_token", "mask_token", "dist_token",  # Special tokens
+            "logit_scale"  # CLIP/Timm models
+        }
+        name = name.lower()
+        return any(k in name for k in keywords)
+
+    @staticmethod
+    def get_layer_id(arch_type, name):
+        map_dict = {
+            'resnet50': {"conv1": 0, "bn1": 0, "layer1": 1, "layer2": 2, "layer3": 3, "layer4": 4},
+            'convnext': {"downsample_layers.0": 0, "stages.0": 1, "stages.1": 2, "stages.2": 3, "stages.3": 4},
+            'swin': {"features.0": 0, "features.1": 1, "features.2": 1, "features.3": 2, "features.4": 2,
+                     "features.5": 3, "features.6": 3, "features.7": 4}
+        }
+        mapping = map_dict[arch_type]
+        return next((val for key, val in mapping.items() if key in name), 5)
+
+    def build_llrd_groups(self, base_lr=1e-4, weight_decay=0.05, layer_decay=0.75):
+        num_layers = 6
+        lr_scales = {
+            i: layer_decay ** (num_layers - 1 - i)
+            for i in range(num_layers)
+        }
+
+        param_groups = {}
+        for name, param in self.model.backbone.body.named_parameters():
+            if not param.requires_grad:
+                continue
+            layer_id = self.get_layer_id(self.args.arch_type, name)
+            decay_type = (
+                "no_decay"
+                if self.no_weight_decay(name, param)
+                else "decay"
+            )
+            group_name = f"{layer_id}_{decay_type}"
+
+            if group_name not in param_groups:
+                param_groups[group_name] = {
+                    "params": [],
+                    "lr": base_lr * lr_scales[layer_id],
+                    "weight_decay": (
+                        0.0 if decay_type == "no_decay"
+                        else weight_decay
+                    ),
+                }
+            param_groups[group_name]["params"].append(param)
+        return list(param_groups.values())
+
+    def build_simple_param_groups(self, lr, weight_decay):
+        decay_params = []
+        no_decay_params = []
+
+        for name, param in self.model.backbone.body.named_parameters():
+            if not param.requires_grad:
+                continue
+            if self.no_weight_decay(name, param):
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+
+        param_groups = [
+            {"params": decay_params, "lr": lr, "weight_decay": weight_decay},
+            {"params": no_decay_params, "lr": lr, "weight_decay": 0.0}
+        ]
+        return param_groups
+
+    def configure_training_strategy(self):
+        strategy = self.args.strategy
+
+        if strategy == "full":
+            for p in self.model.backbone.parameters():
+                p.requires_grad = True
+        elif strategy == "frozen":
+            for p in self.model.backbone.body.parameters():
+                p.requires_grad = False
+            for p in self.model.backbone.fpn.parameters():
+                p.requires_grad = True
+            for p in self.model.rpn.parameters():
+                p.requires_grad = True
+            for p in self.model.roi_heads.parameters():
+                p.requires_grad = True
+        elif strategy == "lora":
+            pass  # since lora is activated at backbone with fpn level
+        else:
+            raise ValueError(strategy)
 
     def configure_optimizers(self):
         lr = self.args.lr
         wd = self.args.weight_decay
         lr_decay = self.args.lr_decay
+        arch_type = self.args.arch_type
 
+        if self.args.strategy == "full":
+            param_groups = self.build_llrd_groups(
+                base_lr=lr,
+                weight_decay=wd,
+                layer_decay=lr_decay
+            )
+        elif self.args.strategy in ["frozen", "lora"]:
+            param_groups = self.build_simple_param_groups(lr=lr, weight_decay=wd)
+        else:
+            raise ValueError(f"Unknown training strategy: {self.args.strategy.training_strategy}")
 
+        optimizer = AdamW(param_groups)
 
+        total_steps = self.trainer.estimated_stepping_batches
+        warmup_steps = int(total_steps / 10)
 
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "step",
-                "frequency": 1,
-            },
-        }
+        def lr_lambda(current_step):
+            if current_step < warmup_steps:
+                return float(current_step) / float(max(1, warmup_steps))
+
+            progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+            return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        scheduler = LambdaLR(optimizer, lr_lambda)
+
+        return {"optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "step", "frequency": 1}}
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=True,
@@ -193,7 +270,8 @@ class LitMaskRCNN(L.LightningModule):
         images, targets = batch
         loss_dict = self.model(images, targets)
         loss = sum(l for l in loss_dict.values())
-        self.log_dict(loss_dict, prog_bar=True)
+        self.log_dict(loss_dict, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -267,3 +345,7 @@ class LitMaskRCNN(L.LightningModule):
         # ALWAYS save (even if no detections)
         write_png(result_img, save_path)
         print(f"Saved inference image to: {save_path}")
+
+
+def main(args):
+    assert args.arch_type in ["resnet50", "swin", "convnext"], f"Unsupported arch_type: {args.arch_type}"
