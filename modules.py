@@ -12,13 +12,12 @@ from dinov3_convnext import ConvNeXt
 from peft import LoraConfig, get_peft_model
 
 
-
-def freeze_except_lora(model):
-    for name, param in model.named_parameters():
-        if "lora" in name.lower():
-            param.requires_grad = True
-        else:
-            param.requires_grad = False
+# def freeze_except_lora(model):
+#     for name, param in model.named_parameters():
+#         if "lora" in name.lower():
+#             param.requires_grad = True
+#         else:
+#             param.requires_grad = False
 
 
 def get_norm(norm, num_channels):
@@ -355,13 +354,6 @@ class BackboneWithFPN(nn.Module):
             # extra_blocks=LastLevelMaxPool(),
         )
         self.out_channels = out_channels
-
-    def apply_lora(self, lora_rank):
-        # Apply LoRA if requested
-        self.body = LoRA.from_module(self.body, rank=lora_rank)
-        freeze_except_lora(self.body)
-        print("LoRA wrapping applied and non-LoRA params frozen")
-        print(f"trainable params: {count_params(self.body)}")
 
     def forward(self, x):
         x = self.body(x)

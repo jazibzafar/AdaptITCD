@@ -1,4 +1,5 @@
 import numpy as np
+import time
 import math
 import os
 import torch
@@ -9,9 +10,9 @@ import lightning as L
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from torch.optim.lr_scheduler import LambdaLR
 from torch.optim import AdamW
+from utils import write_dict_to_yaml
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
-from modules import ViTDetBackbone, TorchvisionSwinV2Backbone, ResNet50Backbone, BackboneWithFPN
-from modules import AltTorchvisionResNet50Backbone, AltTorchvisionSwinV2Backbone
+from modules import ViTDetBackbone, TorchvisionSwinV2Backbone, ResNet50Backbone, BackboneWithFPN, ConvNeXtBackbone
 from dataset import OAMTCDCOCODataset, get_train_transforms
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 from lightning.pytorch.callbacks.finetuning import BaseFinetuning
@@ -24,10 +25,6 @@ import torchvision.transforms.functional as F
 import argparse
 import sys
 
-# TODO: Move seed_everything to main.
-# TODO: Add seed options as args in dict form {s1: 1234, s2: 6147, s3: 4319}
-L.seed_everything(1234)
-
 
 class DotDict(dict):
     __getattr__ = dict.get
@@ -39,14 +36,6 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
-# TODO: For checkpoints, instead of giving it as an argument use a dict with key: arch_type, value: ckpt path
-# TODO: Remove the use_pretrained flag since we're not doing supervised
-# TODO: remove use_lora flag as it should be a strategy
-# TODO: change strategy choices to ['full', 'frozen', 'lora']
-# TODO: add the seed arg
-# TODO: remove fast option
-# TODO: add lr_decay arg with default 0.75
-# TODO: remove warmup up steps arg its hardcoded.
 def get_args():
     parser = argparse.ArgumentParser(description="Training configuration")
 
@@ -55,24 +44,23 @@ def get_args():
     parser.add_argument("--batch_size", type=int, default=4)
 
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr_decay", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.05)
-    parser.add_argument("--warmup_steps", type=int, default=10000)
 
-    parser.add_argument("--use_lora", action="store_true", default=False)
     parser.add_argument("--lora_rank", type=int, default=4)
-    parser.add_argument("--fast", action="store_true", default=False)
     parser.add_argument("--use_pretrained", action="store_true", default=False)
     parser.add_argument("--ckpt_path", type=str,
                         default="")
-    # parser.add_argument("--freeze_backbone", action="store_true", default=False)
     parser.add_argument("--strategy", type=str,
-                        default="full", choices=["gradual", "adaptive", "frozen", "full", "lora"])
+                        default="full", choices=["frozen", "full", "lora"])
     parser.add_argument("--data_path", type=str, default="")
     parser.add_argument("--output_dir", type=str, default="")
     parser.add_argument("--candidate_path", type=str, default="")
 
     parser.add_argument("--train_folds", type=int, nargs="+", default=[1, 2, 3, 4])
     parser.add_argument("--val_folds", type=int, nargs="+", default=[0])
+    parser.add_argument("--seed", type=str,
+                        default="s1", choices=["s1", "s2", "s3"])
 
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--img_size", type=int, default=1024)
@@ -97,13 +85,14 @@ class LitMaskRCNN(L.LightningModule):
         self.batch_size = self.args.batch_size
         self.num_workers = self.args.num_workers
 
-        self.model = self.build_mask_rcnn(self.backbone, self.args.num_classes, self.args.img_size, self.args.fast)
+        self.model = self.build_mask_rcnn(self.backbone, self.args.num_classes, self.args.img_size)
         self.configure_training_strategy()
 
         self.val_map_bbox = MeanAveragePrecision(iou_type="bbox")
         self.test_map_bbox = MeanAveragePrecision(iou_type="bbox")
         self.test_map_segm = MeanAveragePrecision(iou_type="segm")
         self.candidate_path = self.args.candidate_path
+        self.dict_of_metrics = {}
 
     @staticmethod
     def build_mask_rcnn(backbone, num_classes, img_size):
@@ -248,7 +237,6 @@ class LitMaskRCNN(L.LightningModule):
             return 0.5 * (1.0 + math.cos(math.pi * progress))
 
         scheduler = LambdaLR(optimizer, lr_lambda)
-
         return {"optimizer": optimizer,
                 "lr_scheduler": {"scheduler": scheduler, "interval": "step", "frequency": 1}}
 
@@ -265,6 +253,10 @@ class LitMaskRCNN(L.LightningModule):
         return DataLoader(dataset=self.test_dataset, sampler=self.test_sampler, batch_size=self.batch_size,
                           num_workers=self.num_workers, pin_memory=True, persistent_workers=False, drop_last=False,
                           collate_fn=collate_fn)
+
+    def on_fit_start(self):
+        self.train_start_time = time.perf_counter()
+        torch.cuda.reset_peak_memory_stats()
 
     def training_step(self, batch, batch_idx):
         images, targets = batch
@@ -304,19 +296,18 @@ class LitMaskRCNN(L.LightningModule):
         bbox_results = self.test_map_bbox.compute()
         segm_results = self.test_map_segm.compute()
 
-        self.log("test/bbox_mAP", bbox_results["map"], prog_bar=True)
         self.log("test/bbox_mAP_50", bbox_results["map_50"])
-        self.log("test/bbox_mAP_small", bbox_results["map_small"])
-        self.log("test/mask_mAP", segm_results["map"], prog_bar=True)
         self.log("test/mask_mAP_50", segm_results["map_50"])
-        self.log("test/mask_mAP_small", segm_results["map_small"])
+
+        self.dict_of_metrics['bbox_map_50'] = bbox_results["map_50"]
+        self.dict_of_metrics['mask_map_50'] = segm_results["map_50"]
 
         self.test_map_bbox.reset()
         self.test_map_segm.reset()
 
         print("\n" + "=" * 30)
-        print(f"FINAL TEST MASK mAP: {segm_results['map']:.4f}")
-        print(f"FINAL TEST BBOX mAP: {bbox_results['map']:.4f}")
+        print(f"FINAL TEST MASK mAP: {segm_results['map_50']:.4f}")
+        print(f"FINAL TEST BBOX mAP: {bbox_results['map_50']:.4f}")
         print("=" * 30 + "\n")
 
         candidate_img = imread(self.candidate_path)
@@ -326,7 +317,17 @@ class LitMaskRCNN(L.LightningModule):
             output_list = self.model(candidate_img.unsqueeze(0).to(self.device))
         output = output_list[0]
         save_path = os.path.join(self.args.output_dir, "candidate_img.png")
+        metric_path = os.path.join(self.args.output_dir, "accuracy_metrics.yaml")
+        write_dict_to_yaml(metric_path, self.dict_of_metrics)
         self.save_inference_image(candidate_img, output, save_path)
+
+    def on_fit_end(self):
+        efficiency_path = os.path.join(self.args.output_dir, "efficiency_metrics.yaml")
+        training_stats = {
+            "train_time_sec": time.perf_counter() - self.train_start_time,
+            "peak_vram_gb": torch.cuda.max_memory_allocated() / 1024 ** 2,
+        }
+        write_dict_to_yaml(efficiency_path, training_stats)
 
     def save_inference_image(self, img_tensor, pred, save_path, threshold=0.5):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -347,5 +348,96 @@ class LitMaskRCNN(L.LightningModule):
         print(f"Saved inference image to: {save_path}")
 
 
+pretrained_paths = {
+    'resnet50': "/data_hdd/jazibmodels/RSFMCheckpoints/DeepForest_R50.pt",
+    'swin': "/data_hdd/jazibmodels/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth",
+    'convnext': "/data_hdd/jazibmodels/RSFMCheckpoints/dinov3_convnext_small_pretrain_lvd1689m-296db49d.pth"
+}
+
+seed_dict = {'s1': 1234, 's2': 4319, 's3': 6147}
+
+
 def main(args):
+    L.seed_everything(seed_dict[args.seed])
     assert args.arch_type in ["resnet50", "swin", "convnext"], f"Unsupported arch_type: {args.arch_type}"
+    if args.arch_type == "resnet50":
+        backbone = ResNet50Backbone(
+            checkpoint_path=pretrained_paths['resnet50'] if args.use_pretrained else None,
+            apply_lora=True if args.strategy == "lora" else False,
+            lora_rank=args.lora_rank
+        )
+    elif args.arch_type == "convnext":
+        backbone = ConvNeXtBackbone(
+            backbone_type='small',
+            checkpoint_path=pretrained_paths['convnext'] if args.use_pretrained else None,
+            apply_lora=True if args.strategy == "lora" else False,
+            lora_rank=args.lora_rank
+        )
+    elif args.arch_type == "swin":
+        backbone = TorchvisionSwinV2Backbone(
+            checkpoint_path=pretrained_paths['swin'] if args.use_pretrained else None,
+            apply_lora=True if args.strategy == "lora" else False,
+            lora_rank=args.lora_rank
+        )
+    else:
+        print("Please choose the correct backbone.")
+        sys.exit(1)
+
+    backbone_with_fpn = BackboneWithFPN(body=backbone)
+
+    transform = get_train_transforms()
+    train_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
+                                      folds=args.train_folds,
+                                      transforms=transform,
+                                      return_masks=True)
+    val_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
+                                    folds=args.val_folds,
+                                    transforms=transform,
+                                    return_masks=True)
+    test_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
+                                     split='test',
+                                     folds=None,
+                                     return_masks=True)
+
+    lightning_maskrcnn = LitMaskRCNN(
+        backbone=backbone_with_fpn, train_dataset=train_dataset, val_dataset=val_dataset, test_dataset=test_dataset,
+        args=args
+    )
+    checkpoint_callback = ModelCheckpoint(dirpath=args.output_dir,
+                                          # every_n_epochs=int(args.max_epochs / 3),
+                                          save_last=True)
+    logger = TensorBoardLogger(save_dir=args.output_dir,
+                               name="",
+                               default_hp_metric=False)
+
+    early_stop_callback = EarlyStopping(
+        monitor="val/bbox_mAP_50",
+        patience=3,
+        verbose=True,
+        mode="max"
+    )
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+
+    callback_list = [checkpoint_callback, early_stop_callback, lr_monitor]
+
+    trainer = L.Trainer(
+        max_epochs=args.max_epochs,
+        accelerator="gpu",
+        devices=1,
+        callbacks=callback_list,
+        logger=logger,
+        precision="16-mixed",
+        check_val_every_n_epoch=5,
+        # limit_train_batches=100,
+        # limit_val_batches=2,
+        # limit_test_batches=2,
+        log_every_n_steps=100
+    )
+
+    trainer.fit(model=lightning_maskrcnn)
+    trainer.test()
+
+
+if __name__ == '__main__':
+    args = get_args()
+    main(args)
