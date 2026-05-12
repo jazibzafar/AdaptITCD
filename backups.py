@@ -176,3 +176,104 @@
 #             "interval": "step",
 #         },
 #     }
+
+# DEPRECATED SWIN V2 BACKBONE
+# class TorchvisionSwinV2Backbone(nn.Module):
+#     def __init__(self, checkpoint_path=None, apply_lora=False, lora_rank=4):
+#         super().__init__()
+#         # 1. Initialize the base model
+#         # We use weights=None if you are loading a full custom state_dict
+#         base_model = swin_v2_b(weights=None)
+#
+#         if checkpoint_path:
+#             state_dict = torch.load(checkpoint_path, map_location='cpu')
+#             state_dict = model_replace_prefix(state_dict, "", "backbone.backbone.")
+#             base_model.load_state_dict(state_dict, strict=False)
+#             print(f"Custom weights loaded from {checkpoint_path}")
+#
+#         # 2. Extract specific stages for the FPN
+#         # These keys correspond to the 4 stages of the Swin hierarchy
+#         return_nodes = {
+#             'features.1': '0',
+#             'features.3': '1',
+#             'features.5': '2',
+#             'features.7': '3',
+#         }
+#
+#         self.body = create_feature_extractor(base_model, return_nodes=return_nodes)
+#         if apply_lora:
+#             self.body = LoRA.from_module(self.body, rank=lora_rank)
+#             freeze_except_lora(self.body)
+#             print("LoRA wrapping applied and non-LoRA params frozen")
+#             print(f"trainable params: {count_params(self.body)}")
+#
+#         self.out_channels = [128, 256, 512, 1024]
+#
+#     def freeze_parameters(self):
+#         for param in self.body.parameters():
+#             param.requires_grad = False
+#
+#     def forward(self, x):
+#         out = self.body(x)
+#         # Permute from [B, H, W, C] to [B, C, H, W]
+#         for k in out:
+#             out[k] = out[k].permute(0, 3, 1, 2).contiguous()
+#         return out
+
+# ALT RESNET BACKBONE
+# class AltTorchvisionResNet50Backbone(nn.Module):
+#     def __init__(self, checkpoint_path=None):
+#         super().__init__()
+#
+#         self.body = resnet50(weights=None)
+#
+#         if checkpoint_path:
+#             state_dict = torch.load(checkpoint_path, map_location="cpu")
+#             state_dict = model_replace_prefix(state_dict, "", "backbone.body.")
+#             missing, unexpected = self.body.load_state_dict(state_dict, strict=False)
+#             print(f"Custom weights loaded from {checkpoint_path}")
+#             print("Missing keys:", missing)
+#             print("Unexpected keys:", unexpected)
+#
+#         # Stem
+#         self.conv1 = self.body.conv1
+#         self.bn1 = self.body.bn1
+#         self.relu = self.body.relu
+#         self.maxpool = self.body.maxpool
+#
+#         # ResNet stages
+#         self.layer1 = self.body.layer1  # C2
+#         self.layer2 = self.body.layer2  # C3
+#         self.layer3 = self.body.layer3  # C4
+#         self.layer4 = self.body.layer4  # C5
+#
+#         # FPN channel sizes for ResNet50
+#         self.out_channels = [256, 512, 1024, 2048]
+#
+#     def freeze_parameters(self):
+#         for param in self.body.parameters():
+#             param.requires_grad = False
+#
+#     def forward(self, x):
+#         outputs = {}
+#
+#         # Stem
+#         x = self.conv1(x)
+#         x = self.bn1(x)
+#         x = self.relu(x)
+#         x = self.maxpool(x)
+#
+#         # Stages
+#         x = self.layer1(x)
+#         outputs["0"] = x   # C2
+#
+#         x = self.layer2(x)
+#         outputs["1"] = x   # C3
+#
+#         x = self.layer3(x)
+#         outputs["2"] = x   # C4
+#
+#         x = self.layer4(x)
+#         outputs["3"] = x   # C5
+#
+#         return outputs

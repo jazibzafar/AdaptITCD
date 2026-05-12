@@ -9,6 +9,8 @@ from torchvision.models import swin_v2_b
 from torchvision.models import resnet50
 from utils import model_replace_prefix, count_params
 from dinov3_convnext import ConvNeXt
+from peft import LoraConfig, get_peft_model
+
 
 
 def freeze_except_lora(model):
@@ -215,7 +217,7 @@ class ViTDetBackbone(nn.Module):
 
 
 class ResNet50Backbone(nn.Module):
-    def __init__(self, checkpoint_path=None, apply_lora=False, lora_rank=4):
+    def __init__(self, checkpoint_path=None, apply_lora=False, lora_rank=16):
         super().__init__()
         # 1. Load the base ResNet50
         # weights=None if loading a full custom state_dict
@@ -224,25 +226,22 @@ class ResNet50Backbone(nn.Module):
         if checkpoint_path:
             state_dict = torch.load(checkpoint_path, map_location='cpu')
             state_dict = model_replace_prefix(state_dict, "", "backbone.body.")
-            base_model.load_state_dict(state_dict, strict=False)
-            print(f"ResNet50 weights loaded from {checkpoint_path}")
+            missing, unexpected = base_model.load_state_dict(state_dict, strict=False)
+            print(f"Custom weights loaded from {checkpoint_path}")
+            print("Missing keys:", missing)
+            print("Unexpected keys:", unexpected)
 
-        # 2. ResNet stages: layer1=1/4, layer2=1/8, layer3=1/16, layer4=1/32
-        return_nodes = {
-            'layer1': '0',
-            'layer2': '1',
-            'layer3': '2',
-            'layer4': '3',
-        }
-
+        if apply_lora:
+            lora_config = LoraConfig(
+               r=lora_rank, lora_alpha=32, target_modules=["conv1", "conv2", "conv3"], lora_dropout=0.05, bias="none",
+            )
+            base_model = get_peft_model(base_model, lora_config)
+            print("LoRA applied successfully")
+            base_model.print_trainable_parameters()
+        # ResNet stages: layer1=1/4, layer2=1/8, layer3=1/16, layer4=1/32
+        return_nodes = {'layer1': '0', 'layer2': '1', 'layer3': '2', 'layer4': '3'}
         # ResNet50 out_channels for these layers are [256, 512, 1024, 2048]
         self.body = create_feature_extractor(base_model, return_nodes=return_nodes)
-        if apply_lora:
-            self.body = LoRA.from_module(self.body, rank=lora_rank)
-            freeze_except_lora(self.body)
-            print("LoRA wrapping applied and non-LoRA params frozen")
-            print(f"trainable params: {count_params(self.body)}")
-
         self.out_channels = [256, 512, 1024, 2048]
 
     def freeze_parameters(self):
@@ -253,120 +252,28 @@ class ResNet50Backbone(nn.Module):
         return self.body(x)
 
 
-class AltTorchvisionResNet50Backbone(nn.Module):
-    def __init__(self, checkpoint_path=None):
-        super().__init__()
-
-        self.body = resnet50(weights=None)
-
-        if checkpoint_path:
-            state_dict = torch.load(checkpoint_path, map_location="cpu")
-            state_dict = model_replace_prefix(state_dict, "", "backbone.body.")
-            missing, unexpected = self.body.load_state_dict(state_dict, strict=False)
-            print(f"Custom weights loaded from {checkpoint_path}")
-            print("Missing keys:", missing)
-            print("Unexpected keys:", unexpected)
-
-        # Stem
-        self.conv1 = self.body.conv1
-        self.bn1 = self.body.bn1
-        self.relu = self.body.relu
-        self.maxpool = self.body.maxpool
-
-        # ResNet stages
-        self.layer1 = self.body.layer1  # C2
-        self.layer2 = self.body.layer2  # C3
-        self.layer3 = self.body.layer3  # C4
-        self.layer4 = self.body.layer4  # C5
-
-        # FPN channel sizes for ResNet50
-        self.out_channels = [256, 512, 1024, 2048]
-
-    def freeze_parameters(self):
-        for param in self.body.parameters():
-            param.requires_grad = False
-
-    def forward(self, x):
-        outputs = {}
-
-        # Stem
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-
-        # Stages
-        x = self.layer1(x)
-        outputs["0"] = x   # C2
-
-        x = self.layer2(x)
-        outputs["1"] = x   # C3
-
-        x = self.layer3(x)
-        outputs["2"] = x   # C4
-
-        x = self.layer4(x)
-        outputs["3"] = x   # C5
-
-        return outputs
-
-
 class TorchvisionSwinV2Backbone(nn.Module):
-    def __init__(self, checkpoint_path=None, apply_lora=False, lora_rank=4):
+    def __init__(self, checkpoint_path=None, apply_lora=False, lora_rank=16):
         super().__init__()
-        # 1. Initialize the base model
-        # We use weights=None if you are loading a full custom state_dict
+
         base_model = swin_v2_b(weights=None)
-
         if checkpoint_path:
             state_dict = torch.load(checkpoint_path, map_location='cpu')
             state_dict = model_replace_prefix(state_dict, "", "backbone.backbone.")
-            base_model.load_state_dict(state_dict, strict=False)
-            print(f"Custom weights loaded from {checkpoint_path}")
-
-        # 2. Extract specific stages for the FPN
-        # These keys correspond to the 4 stages of the Swin hierarchy
-        return_nodes = {
-            'features.1': '0',
-            'features.3': '1',
-            'features.5': '2',
-            'features.7': '3',
-        }
-
-        self.body = create_feature_extractor(base_model, return_nodes=return_nodes)
-        if apply_lora:
-            self.body = LoRA.from_module(self.body, rank=lora_rank)
-            freeze_except_lora(self.body)
-            print("LoRA wrapping applied and non-LoRA params frozen")
-            print(f"trainable params: {count_params(self.body)}")
-
-        self.out_channels = [128, 256, 512, 1024]
-
-    def freeze_parameters(self):
-        for param in self.body.parameters():
-            param.requires_grad = False
-
-    def forward(self, x):
-        out = self.body(x)
-        # Permute from [B, H, W, C] to [B, C, H, W]
-        for k in out:
-            out[k] = out[k].permute(0, 3, 1, 2).contiguous()
-        return out
-
-
-class AltTorchvisionSwinV2Backbone(nn.Module):
-    def __init__(self, checkpoint_path=None):
-        super().__init__()
-
-        self.body = swin_v2_b(weights=None)
-        if checkpoint_path:
-            state_dict = torch.load(checkpoint_path, map_location='cpu')
-            state_dict = model_replace_prefix(state_dict, "", "backbone.backbone.")
-            missing, unexpected = self.body.load_state_dict(state_dict, strict=False)
+            missing, unexpected = base_model.load_state_dict(state_dict, strict=False)
             print(f"Custom weights loaded from {checkpoint_path}")
             print("Missing keys:", missing)
             print("Unexpected keys:", unexpected)
 
+        if apply_lora:
+            lora_config = LoraConfig(
+               r=lora_rank, lora_alpha=32, target_modules=["qkv", "proj"], lora_dropout=0.05, bias="none",
+            )
+            base_model = get_peft_model(base_model, lora_config)
+            print("LoRA applied successfully")
+            base_model.print_trainable_parameters()
+
+        self.body = base_model
         # We only need the hierarchical features
         self.features = self.body.features
         # Channels for FPN
@@ -398,25 +305,35 @@ class AltTorchvisionSwinV2Backbone(nn.Module):
 
 
 class ConvNeXtBackbone(nn.Module):
-    def __init__(self, backbone_type='small', checkpoint_path=None):
+    def __init__(self, backbone_type='small', checkpoint_path=None, apply_lora=False, lora_rank=16):
         super().__init__()
         self.backbone_type = backbone_type
         self.body_params = self.get_depth_and_dims(self.backbone_type)
-        self.body = ConvNeXt(**self.body_params)
+        base_model = ConvNeXt(**self.body_params)
         self.depths = self.body_params['depths']
         self.out_channels = self.body_params['dims']
         self.feat_names = ['0', '1', '2', '3']
         if checkpoint_path:
             state_dict = torch.load(checkpoint_path, map_location='cpu')
-            self.body.load_state_dict(state_dict, strict=False)
+            missing, unexpected = base_model.load_state_dict(state_dict, strict=False)
             print(f"ConvNext-{self.backbone_type} weights loaded from {checkpoint_path}")
+            print("Missing keys:", missing)
+            print("Unexpected keys:", unexpected)
+        if apply_lora:
+            lora_config = LoraConfig(
+               r=lora_rank, lora_alpha=32, target_modules=["pwconv1", "pwconv2"], lora_dropout=0.05, bias="none",
+            )
+            base_model = get_peft_model(base_model, lora_config)
+            print("LoRA applied successfully")
+            base_model.print_trainable_parameters()
+        self.body = base_model
 
     @staticmethod
     def get_depth_and_dims(backbone_type):
-        convnext_sizes = { "tiny": dict(depths=[3, 3, 9, 3], dims=[96, 192, 384, 768]),
-                           "small": dict(depths=[3, 3, 27, 3], dims=[96, 192, 384, 768]),
-                           "base": dict(depths=[3, 3, 27, 3], dims=[128, 256, 512, 1024]),
-                           "large": dict(depths=[3, 3, 27, 3], dims=[192, 384, 768, 1536])}
+        convnext_sizes = {"tiny": dict(depths=[3, 3, 9, 3], dims=[96, 192, 384, 768]),
+                          "small": dict(depths=[3, 3, 27, 3], dims=[96, 192, 384, 768]),
+                          "base": dict(depths=[3, 3, 27, 3], dims=[128, 256, 512, 1024]),
+                          "large": dict(depths=[3, 3, 27, 3], dims=[192, 384, 768, 1536])}
         return convnext_sizes[backbone_type]
 
     def freeze_parameters(self):
@@ -426,7 +343,6 @@ class ConvNeXtBackbone(nn.Module):
     def forward(self, x):
         output_tuple = self.body.get_intermediate_layers(x, n=4, reshape=True)
         return {k: v for k, v in zip(self.feat_names, output_tuple)}
-
 
 
 class BackboneWithFPN(nn.Module):

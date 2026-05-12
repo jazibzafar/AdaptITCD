@@ -44,9 +44,7 @@ r50_config = LoraConfig(
 r50_peft = get_peft_model(r50, r50_config)
 r50_peft.print_trainable_parameters()
 ##
-from modules import AltTorchvisionSwinV2Backbone
-
-swin = AltTorchvisionSwinV2Backbone()
+swin = TorchvisionSwinV2Backbone()  # renamed AltTorchvisionSwinV2Backbone
 
 swin_config = LoraConfig(
     r=16,
