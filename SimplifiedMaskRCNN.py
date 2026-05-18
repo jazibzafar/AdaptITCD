@@ -449,9 +449,9 @@ def main(args):
         logger=logger,
         precision="16-mixed",
         check_val_every_n_epoch=5,
-        limit_train_batches=100,
-        limit_val_batches=2,
-        limit_test_batches=2,
+        # limit_train_batches=100,
+        # limit_val_batches=2,
+        # limit_test_batches=2,
         log_every_n_steps=100
     )
 
