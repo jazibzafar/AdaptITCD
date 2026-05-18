@@ -83,7 +83,6 @@ class LitMaskRCNN(L.LightningModule):
         self.val_map_bbox = MeanAveragePrecision(iou_type="bbox")
         self.test_map_bbox = MeanAveragePrecision(iou_type="bbox")
         self.test_map_segm = MeanAveragePrecision(iou_type="segm")
-        self.candidate_path = self.args.candidate_path
         self.dict_of_metrics = {}
 
     @staticmethod
@@ -237,12 +236,12 @@ class LitMaskRCNN(L.LightningModule):
                           persistent_workers=True, shuffle=True, drop_last=True, collate_fn=collate_fn)
 
     def val_dataloader(self):
-        return DataLoader(dataset=self.val_dataset, sampler=self.val_sampler, batch_size=self.batch_size,
+        return DataLoader(dataset=self.val_dataset, batch_size=self.batch_size,
                           num_workers=self.num_workers, pin_memory=True, persistent_workers=False, drop_last=False,
                           collate_fn=collate_fn)
 
     def test_dataloader(self):
-        return DataLoader(dataset=self.test_dataset, sampler=self.test_sampler, batch_size=self.batch_size,
+        return DataLoader(dataset=self.test_dataset, batch_size=self.batch_size,
                           num_workers=self.num_workers, pin_memory=True, persistent_workers=False, drop_last=False,
                           collate_fn=collate_fn)
 
@@ -291,8 +290,8 @@ class LitMaskRCNN(L.LightningModule):
         self.log("test/bbox_mAP_50", bbox_results["map_50"])
         self.log("test/mask_mAP_50", segm_results["map_50"])
 
-        self.dict_of_metrics['bbox_map_50'] = bbox_results["map_50"]
-        self.dict_of_metrics['mask_map_50'] = segm_results["map_50"]
+        self.dict_of_metrics['bbox_map_50'] = bbox_results["map_50"].detach().numpy()
+        self.dict_of_metrics['mask_map_50'] = segm_results["map_50"].detach().numpy()
 
         self.test_map_bbox.reset()
         self.test_map_segm.reset()
@@ -302,7 +301,7 @@ class LitMaskRCNN(L.LightningModule):
         print(f"FINAL TEST BBOX mAP: {bbox_results['map_50']:.4f}")
         print("=" * 30 + "\n")
 
-        candidate_img = imread(self.candidate_path)
+        candidate_img = imread(paths['candidate'])
         candidate_img = F.to_tensor(candidate_img)
 
         with torch.no_grad():
@@ -354,8 +353,8 @@ seed_dict = {'s1': 1234, 's2': 4319, 's3': 6147}
 
 split_dict = {
     "full": {"train": [0, 1, 2, 3], "val": [4]},
-    "half": {"train": [0, 1], "val": [2, 3, 4]},
-    "quarter": {"train": [0], "val": [1, 2, 3, 4]}
+    "half": {"train": [0, 1], "val": [4]},
+    "quarter": {"train": [1], "val": [4]}
 }
 
 
