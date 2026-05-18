@@ -36,6 +36,25 @@ def collate_fn(batch):
     return tuple(zip(*batch))
 
 
+def make_yaml_safe(data):
+    """
+    Recursively converts Tensors, NumPy arrays, and scalars into
+    standard Python types safe for YAML serialization.
+    """
+    if isinstance(data, dict):
+        return {k: make_yaml_safe(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [make_yaml_safe(v) for v in data]
+    elif isinstance(data, tuple):
+        return tuple(make_yaml_safe(v) for v in data)
+    elif isinstance(data, (torch.Tensor, np.ndarray)):
+        # If it's a single value, convert to scalar; otherwise convert to a list
+        return data.tolist() if data.ndim > 0 else data.item()
+    elif isinstance(data, (np.integer, np.floating)):
+        return data.item()
+    return data
+
+
 def get_args():
     parser = argparse.ArgumentParser(description="Training configuration")
     parser.add_argument("--num_classes", type=int, default=3)
@@ -290,8 +309,8 @@ class LitMaskRCNN(L.LightningModule):
         self.log("test/bbox_mAP_50", bbox_results["map_50"])
         self.log("test/mask_mAP_50", segm_results["map_50"])
 
-        self.dict_of_metrics['bbox_map_50'] = bbox_results["map_50"].detach().numpy()
-        self.dict_of_metrics['mask_map_50'] = segm_results["map_50"].detach().numpy()
+        self.dict_of_metrics['bbox_map_50'] = bbox_results["map_50"]
+        self.dict_of_metrics['mask_map_50'] = segm_results["map_50"]
 
         self.test_map_bbox.reset()
         self.test_map_segm.reset()
@@ -309,7 +328,8 @@ class LitMaskRCNN(L.LightningModule):
         output = output_list[0]
         save_path = os.path.join(paths['output'], "candidate_img.png")
         metric_path = os.path.join(paths['output'], "accuracy_metrics.yaml")
-        write_dict_to_yaml(metric_path, self.dict_of_metrics)
+        clean_metrics = make_yaml_safe(self.dict_of_metrics)
+        write_dict_to_yaml(metric_path, clean_metrics)
         self.save_inference_image(candidate_img, output, save_path)
 
     def on_fit_end(self):
@@ -429,14 +449,14 @@ def main(args):
         logger=logger,
         precision="16-mixed",
         check_val_every_n_epoch=5,
-        # limit_train_batches=100,
-        # limit_val_batches=2,
-        # limit_test_batches=2,
+        limit_train_batches=100,
+        limit_val_batches=2,
+        limit_test_batches=2,
         log_every_n_steps=100
     )
 
     trainer.fit(model=lightning_maskrcnn)
-    trainer.test()
+    trainer.test(ckpt_path='last')
 
 
 if __name__ == '__main__':
