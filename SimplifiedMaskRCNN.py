@@ -39,7 +39,7 @@ def collate_fn(batch):
 def get_args():
     parser = argparse.ArgumentParser(description="Training configuration")
     parser.add_argument("--num_classes", type=int, default=3)
-    parser.add_argument("--node", type=int, default=-1)  # just added to log which node was used for which exp
+    parser.add_argument("--node", type=str, default="not specified")  # added to log which node was used for which exp
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-4)
