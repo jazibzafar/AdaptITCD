@@ -38,33 +38,24 @@ def collate_fn(batch):
 
 def get_args():
     parser = argparse.ArgumentParser(description="Training configuration")
-
     parser.add_argument("--num_classes", type=int, default=3)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--batch_size", type=int, default=4)
-
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--lr_decay", type=float, default=1e-4)
+    parser.add_argument("--lr_decay", type=float, default=0.75)
     parser.add_argument("--weight_decay", type=float, default=0.05)
-
-    parser.add_argument("--lora_rank", type=int, default=4)
+    parser.add_argument("--lora_rank", type=int, default=16)
     parser.add_argument("--use_pretrained", action="store_true", default=False)
-    parser.add_argument("--ckpt_path", type=str,
-                        default="")
     parser.add_argument("--strategy", type=str,
                         default="full", choices=["frozen", "full", "lora"])
-    parser.add_argument("--data_path", type=str, default="")
-    parser.add_argument("--output_dir", type=str, default="")
-    parser.add_argument("--candidate_path", type=str, default="")
-
-    parser.add_argument("--train_folds", type=int, nargs="+", default=[1, 2, 3, 4])
-    parser.add_argument("--val_folds", type=int, nargs="+", default=[0])
+    parser.add_argument("--split", type=str,
+                        default="full", choices=["full", "half", "quarter"])
     parser.add_argument("--seed", type=str,
                         default="s1", choices=["s1", "s2", "s3"])
-
     parser.add_argument("--max_epochs", type=int, default=10)
     parser.add_argument("--img_size", type=int, default=1024)
-    parser.add_argument("--arch_type", type=str, default="")
+    parser.add_argument("--arch_type", type=str,
+                        default="resnet50", choices=['swin', 'convnext', 'resnet50'])
     return parser.parse_args()
 
 
@@ -203,7 +194,7 @@ class LitMaskRCNN(L.LightningModule):
             for p in self.model.roi_heads.parameters():
                 p.requires_grad = True
         elif strategy == "lora":
-            pass  # since lora is activated at backbone with fpn level
+            pass  # since lora is activated at backbone level
         else:
             raise ValueError(strategy)
 
@@ -316,13 +307,13 @@ class LitMaskRCNN(L.LightningModule):
         with torch.no_grad():
             output_list = self.model(candidate_img.unsqueeze(0).to(self.device))
         output = output_list[0]
-        save_path = os.path.join(self.args.output_dir, "candidate_img.png")
-        metric_path = os.path.join(self.args.output_dir, "accuracy_metrics.yaml")
+        save_path = os.path.join(paths['output'], "candidate_img.png")
+        metric_path = os.path.join(paths['output'], "accuracy_metrics.yaml")
         write_dict_to_yaml(metric_path, self.dict_of_metrics)
         self.save_inference_image(candidate_img, output, save_path)
 
     def on_fit_end(self):
-        efficiency_path = os.path.join(self.args.output_dir, "efficiency_metrics.yaml")
+        efficiency_path = os.path.join(paths['output'], "efficiency_metrics.yaml")
         training_stats = {
             "train_time_sec": time.perf_counter() - self.train_start_time,
             "peak_vram_gb": torch.cuda.max_memory_allocated() / 1024 ** 2,
@@ -348,13 +339,23 @@ class LitMaskRCNN(L.LightningModule):
         print(f"Saved inference image to: {save_path}")
 
 
-pretrained_paths = {
+paths = {
     'resnet50': "/data_hdd/jazibmodels/RSFMCheckpoints/DeepForest_R50.pt",
     'swin': "/data_hdd/jazibmodels/RSFMCheckpoints/satlasnet_aerial_swin_v2_b_single_image.pth",
-    'convnext': "/data_hdd/jazibmodels/RSFMCheckpoints/dinov3_convnext_small_pretrain_lvd1689m-296db49d.pth"
+    'convnext': "/data_hdd/jazibmodels/RSFMCheckpoints/dinov3_convnext_small_pretrain_lvd1689m-296db49d.pth",
+    'data': "/data_hdd/jazibsdata/oam-tcd-coco-style-1024/",  # "/data_local_ssd/oam-tcd/"
+    'output': "/data_hdd/jazibmodels/Fine_Tuning_Strategies/",
+    'candidate': "/data_hdd/jazibsdata/oam-tcd-coco-style-1024/candidate_img/tile_93_1024_0.tif"
 }
 
 seed_dict = {'s1': 1234, 's2': 4319, 's3': 6147}
+
+
+split_dict = {
+    "full": {"train": [0, 1, 2, 3], "val": [4]},
+    "half": {"train": [0, 1], "val": [2, 3, 4]},
+    "quarter": {"train": [0], "val": [1, 2, 3, 4]}
+}
 
 
 def main(args):
@@ -362,20 +363,20 @@ def main(args):
     assert args.arch_type in ["resnet50", "swin", "convnext"], f"Unsupported arch_type: {args.arch_type}"
     if args.arch_type == "resnet50":
         backbone = ResNet50Backbone(
-            checkpoint_path=pretrained_paths['resnet50'] if args.use_pretrained else None,
+            checkpoint_path=paths['resnet50'] if args.use_pretrained else None,
             apply_lora=True if args.strategy == "lora" else False,
             lora_rank=args.lora_rank
         )
     elif args.arch_type == "convnext":
         backbone = ConvNeXtBackbone(
             backbone_type='small',
-            checkpoint_path=pretrained_paths['convnext'] if args.use_pretrained else None,
+            checkpoint_path=paths['convnext'] if args.use_pretrained else None,
             apply_lora=True if args.strategy == "lora" else False,
             lora_rank=args.lora_rank
         )
     elif args.arch_type == "swin":
         backbone = TorchvisionSwinV2Backbone(
-            checkpoint_path=pretrained_paths['swin'] if args.use_pretrained else None,
+            checkpoint_path=paths['swin'] if args.use_pretrained else None,
             apply_lora=True if args.strategy == "lora" else False,
             lora_rank=args.lora_rank
         )
@@ -386,15 +387,15 @@ def main(args):
     backbone_with_fpn = BackboneWithFPN(body=backbone)
 
     transform = get_train_transforms()
-    train_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
-                                      folds=args.train_folds,
+    train_dataset = OAMTCDCOCODataset(root_dir=paths['data'],
+                                      folds=split_dict[args.split]["train"],
                                       transforms=transform,
                                       return_masks=True)
-    val_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
-                                    folds=args.val_folds,
+    val_dataset = OAMTCDCOCODataset(root_dir=paths['data'],
+                                    folds=split_dict[args.split]["val"],
                                     transforms=transform,
                                     return_masks=True)
-    test_dataset = OAMTCDCOCODataset(root_dir=args.data_path,
+    test_dataset = OAMTCDCOCODataset(root_dir=paths['data'],
                                      split='test',
                                      folds=None,
                                      return_masks=True)
@@ -403,10 +404,10 @@ def main(args):
         backbone=backbone_with_fpn, train_dataset=train_dataset, val_dataset=val_dataset, test_dataset=test_dataset,
         args=args
     )
-    checkpoint_callback = ModelCheckpoint(dirpath=args.output_dir,
+    checkpoint_callback = ModelCheckpoint(dirpath=paths['output'],
                                           # every_n_epochs=int(args.max_epochs / 3),
                                           save_last=True)
-    logger = TensorBoardLogger(save_dir=args.output_dir,
+    logger = TensorBoardLogger(save_dir=paths['output'],
                                name="",
                                default_hp_metric=False)
 
@@ -440,4 +441,12 @@ def main(args):
 
 if __name__ == '__main__':
     args = get_args()
+    # create the output_directory and update path
+    experiment_name = f"{args.seed}_{args.arch_type}_{args.strategy}_{args.split}"
+    paths['output'] = os.path.join(paths['output'], experiment_name)
+    os.makedirs(paths['output'], exist_ok=True)
+    # write args to yaml for record keeping
+    args_yml_fp = os.path.join(paths['output'], "args.yaml")
+    write_dict_to_yaml(args_yml_fp, args.__dict__)
+    # run the training
     main(args)
