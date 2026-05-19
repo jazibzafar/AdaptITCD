@@ -241,6 +241,7 @@ class ResNet50Backbone(nn.Module):
                r=lora_rank, lora_alpha=32, target_modules=["conv1", "conv2", "conv3"], lora_dropout=0.05, bias="none",
             )
             self.body = get_peft_model(self.body, lora_config)
+            self.body.gradient_checkpointing_enable()
             print("LoRA applied successfully")
             self.body.print_trainable_parameters()
 
@@ -270,6 +271,7 @@ class TorchvisionSwinV2Backbone(nn.Module):
                r=lora_rank, lora_alpha=32, target_modules=["qkv", "proj"], lora_dropout=0.05, bias="none",
             )
             base_model = get_peft_model(base_model, lora_config)
+            base_model.gradient_checkpointing_enable()
             print("LoRA applied successfully")
             base_model.print_trainable_parameters()
 
@@ -324,6 +326,7 @@ class ConvNeXtBackbone(nn.Module):
                r=lora_rank, lora_alpha=32, target_modules=["pwconv1", "pwconv2"], lora_dropout=0.05, bias="none",
             )
             base_model = get_peft_model(base_model, lora_config)
+            base_model.gradient_checkpointing_enable()
             print("LoRA applied successfully")
             base_model.print_trainable_parameters()
         self.body = base_model
