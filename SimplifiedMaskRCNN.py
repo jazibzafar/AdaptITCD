@@ -183,7 +183,7 @@ class LitMaskRCNN(L.LightningModule):
         decay_params = []
         no_decay_params = []
 
-        for name, param in self.model.backbone.body.named_parameters():
+        for name, param in self.model.named_parameters():
             if not param.requires_grad:
                 continue
             if self.no_weight_decay(name, param):
