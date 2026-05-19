@@ -12,12 +12,12 @@ from dinov3_convnext import ConvNeXt
 from peft import LoraConfig, get_peft_model
 
 
-# def freeze_except_lora(model):
-#     for name, param in model.named_parameters():
-#         if "lora" in name.lower():
-#             param.requires_grad = True
-#         else:
-#             param.requires_grad = False
+def freeze_except_lora(model):
+    for name, param in model.named_parameters():
+        if "lora" in name.lower():
+            param.requires_grad = True
+        else:
+            param.requires_grad = False
 
 
 def get_norm(norm, num_channels):
@@ -230,18 +230,19 @@ class ResNet50Backbone(nn.Module):
             print("Missing keys:", missing)
             print("Unexpected keys:", unexpected)
 
-        if apply_lora:
-            lora_config = LoraConfig(
-               r=lora_rank, lora_alpha=32, target_modules=["conv1", "conv2", "conv3"], lora_dropout=0.05, bias="none",
-            )
-            base_model = get_peft_model(base_model, lora_config)
-            print("LoRA applied successfully")
-            base_model.print_trainable_parameters()
         # ResNet stages: layer1=1/4, layer2=1/8, layer3=1/16, layer4=1/32
         return_nodes = {'layer1': '0', 'layer2': '1', 'layer3': '2', 'layer4': '3'}
         # ResNet50 out_channels for these layers are [256, 512, 1024, 2048]
         self.body = create_feature_extractor(base_model, return_nodes=return_nodes)
         self.out_channels = [256, 512, 1024, 2048]
+
+        if apply_lora:
+            lora_config = LoraConfig(
+               r=lora_rank, lora_alpha=32, target_modules=["conv1", "conv2", "conv3"], lora_dropout=0.05, bias="none",
+            )
+            self.body = get_peft_model(self.body, lora_config)
+            print("LoRA applied successfully")
+            self.body.print_trainable_parameters()
 
     def freeze_parameters(self):
         for param in self.body.parameters():
