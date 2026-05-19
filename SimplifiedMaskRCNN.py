@@ -150,33 +150,39 @@ class LitMaskRCNN(L.LightningModule):
 
     def build_llrd_groups(self, base_lr=1e-4, weight_decay=0.05, layer_decay=0.75):
         num_layers = 6
-        lr_scales = {
-            i: layer_decay ** (num_layers - 1 - i)
-            for i in range(num_layers)
-        }
-
+        lr_scales = {i: layer_decay ** (num_layers - 1 - i) for i in range(num_layers)}
         param_groups = {}
-        for name, param in self.model.backbone.body.named_parameters():
+        for name, param in self.named_parameters():
             if not param.requires_grad:
                 continue
-            layer_id = self.get_layer_id(self.args.arch_type, name)
-            decay_type = (
-                "no_decay"
-                if self.no_weight_decay(name, param)
-                else "decay"
-            )
-            group_name = f"{layer_id}_{decay_type}"
+            decay_type = ("no_decay" if self.no_weight_decay(name, param) else "decay")
+            # If the parameter belongs to FPN, RPN, or ROI Heads, bypass all backbone math
+            if "fpn" in name or "rpn" in name or "roi_heads" in name:
+                lr = base_lr
+                group_name = f"head_{name.split('.')[1]}_{decay_type}"
+            # Standard Backbone Body processing
+            elif "backbone.body" in name:
+                layer_id = self.get_layer_id(self.args.arch_type, name)
+                lr = base_lr * lr_scales[layer_id]
+                group_name = f"body_layer_{layer_id}_{decay_type}"
+            # Catch-all fallback for any other parameter
+            else:
+                lr = base_lr
+                group_name = f"other_{decay_type}"
 
             if group_name not in param_groups:
                 param_groups[group_name] = {
                     "params": [],
-                    "lr": base_lr * lr_scales[layer_id],
-                    "weight_decay": (
-                        0.0 if decay_type == "no_decay"
-                        else weight_decay
-                    ),
+                    "lr": lr,
+                    "weight_decay": 0.0 if decay_type == "no_decay" else weight_decay,
                 }
             param_groups[group_name]["params"].append(param)
+        # Debugging print statement to see exactly what groups are created
+        print("\n--- OPTIMIZER PARAMETER GROUPS GENERATED ---")
+        for g_name, g_data in param_groups.items():
+            print(f"Group: {g_name:<35} | LR: {g_data['lr']:.2e} | Params: {len(g_data['params'])}")
+        print("--------------------------------------------\n")
+
         return list(param_groups.values())
 
     def build_simple_param_groups(self, lr, weight_decay):

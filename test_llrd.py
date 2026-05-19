@@ -84,7 +84,7 @@ output = build_llrd_groups(body, 'resnet50')
 
 ##
 from modules import BackboneWithFPN
-from LitMaskRCNN import LitMaskRCNN
+from SimplifiedMaskRCNN import LitMaskRCNN
 
 backbone = BackboneWithFPN(model_conv)
 
