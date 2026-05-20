@@ -1,3 +1,4 @@
+import gc
 import numpy as np
 import time
 import math
@@ -82,16 +83,11 @@ def get_args():
 class LitMaskRCNN(L.LightningModule):
     def __init__(self, backbone, train_dataset, val_dataset, test_dataset, args):
         super().__init__()
-        # self.save_hyperparameters(ignore=['backbone'])
-
         self.backbone = backbone
         self.args = args
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.test_dataset = test_dataset
-        # self.train_sampler = RandomSampler(self.train_dataset)
-        # self.val_sampler = SequentialSampler(self.val_dataset)
-        # self.test_sampler = SequentialSampler(self.test_dataset)
 
         self.batch_size = self.args.batch_size
         self.num_workers = self.args.num_workers
@@ -285,28 +281,67 @@ class LitMaskRCNN(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         images, targets = batch
         outputs = self.model(images)
+
+        cpu_outputs = []
+        cpu_targets = []
         for output in outputs:
-            if "masks" in output:
-                # Thresholding (at 0.5) to convert float probs to bool,
-                output["masks"] = (output["masks"] > 0.5).squeeze(1).to(torch.uint8)
-        self.val_map_bbox.update(outputs, targets)
-        return outputs
+            cleaned = {}
+            for k, v in output.items():
+                if k == "masks":
+                    v = (v > 0.5).squeeze(1).to(torch.uint8)
+                cleaned[k] = v.detach().cpu()
+            cpu_outputs.append(cleaned)
+        for target in targets:
+            cleaned_target = {
+                k: v.detach().cpu() if torch.is_tensor(v) else v
+                for k, v in target.items()
+            }
+            cpu_targets.append(cleaned_target)
+        self.val_map_bbox.update(cpu_outputs, cpu_targets)
+        # # OOM Prevention
+        # for output in outputs:
+        #     if "masks" in output:
+        #         # Thresholding (at 0.5) to convert float probs to bool,
+        #         output["masks"] = (output["masks"] > 0.5).squeeze(1).to(torch.uint8)
+        # self.val_map_bbox.update(outputs, targets)
+        # return outputs
+        return None
 
     def on_validation_epoch_end(self):
         bbox_results = self.val_map_bbox.compute()
         self.log("val/bbox_mAP_50", bbox_results["map_50"], prog_bar=True)
         self.val_map_bbox.reset()
+        # OOM Prevention
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def test_step(self, batch, batch_idx):
         images, targets = batch
-        # Inference mode logic
         outputs = self.model(images)
+        # OOM Prevention
+        # for output in outputs:
+        #     if "masks" in output:
+        #         output["masks"] = (output["masks"] > 0.5).squeeze(1).to(torch.uint8)
+        # self.test_map_bbox.update(outputs, targets)
+        # self.test_map_segm.update(outputs, targets)
+        cpu_outputs = []
+        cpu_targets = []
         for output in outputs:
-            if "masks" in output:
-                output["masks"] = (output["masks"] > 0.5).squeeze(1).to(torch.uint8)
-        # Update test metric
-        self.test_map_bbox.update(outputs, targets)
-        self.test_map_segm.update(outputs, targets)
+            cleaned = {}
+            for k, v in output.items():
+                if k == "masks":
+                    v = (v > 0.5).squeeze(1).to(torch.uint8)
+                cleaned[k] = v.detach().cpu()
+            cpu_outputs.append(cleaned)
+        for target in targets:
+            cleaned_target = {
+                k: v.detach().cpu() if torch.is_tensor(v) else v
+                for k, v in target.items()
+            }
+            cpu_targets.append(cleaned_target)
+        self.test_map_bbox.update(cpu_outputs, cpu_targets)
+        self.test_map_segm.update(cpu_outputs, cpu_targets)
+        return None
 
     def on_test_epoch_end(self):
         bbox_results = self.test_map_bbox.compute()
@@ -320,6 +355,8 @@ class LitMaskRCNN(L.LightningModule):
 
         self.test_map_bbox.reset()
         self.test_map_segm.reset()
+        gc.collect()
+        torch.cuda.empty_cache()
 
         print("\n" + "=" * 30)
         print(f"FINAL TEST MASK mAP: {segm_results['map_50']:.4f}")
@@ -431,7 +468,6 @@ def main(args):
         args=args
     )
     checkpoint_callback = ModelCheckpoint(dirpath=paths['output'],
-                                          # every_n_epochs=int(args.max_epochs / 3),
                                           save_last=True)
     logger = TensorBoardLogger(save_dir=paths['output'],
                                name="",
@@ -455,9 +491,6 @@ def main(args):
         logger=logger,
         precision="16-mixed",
         check_val_every_n_epoch=5,
-        # limit_train_batches=100,
-        # limit_val_batches=2,
-        # limit_test_batches=2,
         log_every_n_steps=100
     )
 
