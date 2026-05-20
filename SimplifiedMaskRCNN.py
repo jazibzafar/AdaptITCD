@@ -27,6 +27,9 @@ import argparse
 import sys
 
 
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+
 class DotDict(dict):
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
@@ -274,8 +277,11 @@ class LitMaskRCNN(L.LightningModule):
         images, targets = batch
         loss_dict = self.model(images, targets)
         loss = sum(l for l in loss_dict.values())
-        self.log_dict(loss_dict, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        detached_losses = {k: v.detach() for k, v in loss_dict.items()}
+        self.log_dict(detached_losses, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("train/loss", loss.detach(), prog_bar=True, on_step=False, on_epoch=True)
+        # self.log_dict(loss_dict, prog_bar=True, on_step=False, on_epoch=True)
+        # self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
