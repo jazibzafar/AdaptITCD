@@ -278,7 +278,7 @@ class LitMaskRCNN(L.LightningModule):
         loss_dict = self.model(images, targets)
         loss = sum(l for l in loss_dict.values())
         detached_losses = {k: v.detach() for k, v in loss_dict.items()}
-        self.log_dict(detached_losses, prog_bar=True, on_step=False, on_epoch=True)
+        self.log_dict(detached_losses, prog_bar=False, on_step=False, on_epoch=True)
         self.log("train/loss", loss.detach(), prog_bar=True, on_step=False, on_epoch=True)
         # self.log_dict(loss_dict, prog_bar=True, on_step=False, on_epoch=True)
         # self.log("train/loss", loss, prog_bar=True, on_step=False, on_epoch=True)
