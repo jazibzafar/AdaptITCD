@@ -7,8 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 stats_yaml = "./statistics/all_seed_1_stats.yaml"
-
 stats_dict = yaml_to_dict_parser(stats_yaml)
+
 
 
 def extract_rows(data):
@@ -39,17 +39,14 @@ def pareto_frontier_line(x, y):
     idx = np.argsort(x)
     x_sorted = np.array(x)[idx]
     y_sorted = np.array(y)[idx]
-
     frontier_x = []
     frontier_y = []
-
     best_y = -np.inf
     for xi, yi in zip(x_sorted, y_sorted):
         if yi > best_y:
             frontier_x.append(xi)
             frontier_y.append(yi)
             best_y = yi
-
     return np.array(frontier_x), np.array(frontier_y)
 
 
@@ -61,8 +58,8 @@ def plot(ax, rows, cost_key, title, show_labels=True):
     strategies = sorted(set(r["strategy"] for r in rows))
     arches = sorted(set(r["arch"] for r in rows))
 
-    markers = {a: m for a, m in zip(arches, ["o", "s", "^", "D", "X", "*"])}
-    colors = {s: c for s, c in zip(strategies, ["tab:blue", "tab:orange", "tab:green", "tab:red"])}
+    markers = {a: m for a, m in zip(arches, ["o", "s", "^"])}  # ["o", "s", "^", "D", "X", "*"]
+    colors = {"frozen": "#56B4E9", "full": "#F0E442", "lora": "#D55E00"}
 
     x = np.array([r[cost_key] for r in rows])
     y = np.array([r["mask_ap"] for r in rows])
@@ -77,14 +74,20 @@ def plot(ax, rows, cost_key, title, show_labels=True):
             color=colors[r["strategy"]],
             marker=markers[r["arch"]],
             s=90,
-            alpha=0.65
+            edgecolor="black",
+            linewidth=0.8,
+            alpha=0.9
         )
-
+        _s, _ar, _st, _sp = r["name"].split("_")
+        if _st == "full":
+            text_name = _ar + " fft"
+        else:
+            text_name = _ar + " " + _st
         if show_labels:
             ax.text(
                 r[cost_key],
                 r["mask_ap"],
-                r["name"].replace("s1_", ""),
+                text_name,  # r["name"].replace("s1_", "")
                 fontsize=7,
                 alpha=0.75
             )
@@ -96,7 +99,7 @@ def plot(ax, rows, cost_key, title, show_labels=True):
     ax.plot(fx, fy, linestyle="--", linewidth=2, color="black", alpha=0.8)
 
     # highlight frontier points
-    ax.scatter(fx, fy, color="black", s=120, zorder=5)
+    # ax.scatter(fx, fy, color="black", s=120, zorder=5)
 
     # ----------------------------
     # legend proxies
@@ -108,7 +111,8 @@ def plot(ax, rows, cost_key, title, show_labels=True):
         ax.scatter([], [], marker=markers[a], color="gray", label=a)
 
     ax.set_title(title)
-    ax.set_xlabel("VRAM (GB)" if cost_key == "vram" else "Training Time (hrs)")
+    ax.set_ylim(ymin=0.30, ymax=0.5)
+    ax.set_xlabel("Peak VRAM Usage (GB)" if cost_key == "vram" else "Training Time (hrs)")
     ax.set_ylabel("Mask AP")
     ax.grid(True, alpha=0.3)
 
@@ -116,32 +120,48 @@ def plot(ax, rows, cost_key, title, show_labels=True):
 # ----------------------------
 # Full figure (2x2)
 # ----------------------------
-def plot_all(rows):
+def plot_all(rows, cost):
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-
-    splits = ["full", "quarter"]
-    costs = ["vram", "time_hr"]
+    splits = ["quarter", "full"]
+    # costs = ["vram", "time_hr"]
 
     for i, split in enumerate(splits):
         subset = [r for r in rows if r["split"] == split]
-
-        for j, cost in enumerate(costs):
-            plot(
-                axes[i, j],
-                subset,
-                cost_key=cost,
-                title=f"{split.upper()} | {'VRAM' if cost=='vram' else 'Time'}"
-            )
+        plot(
+            axes[i],
+            subset,
+            cost_key=cost,
+            title=f"{'High Data' if split=='full' else 'Low Data'}"
+        )
 
     plt.tight_layout()
     plt.show()
 
 
 rows = extract_rows(stats_dict)
-plot_all(rows)
+plot_all(rows, "time_hr")  # costs = ["vram", "time_hr"]
 
-
+# def plot_all(rows):
+#
+#     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+#
+#     splits = ["full", "quarter"]
+#     costs = ["vram", "time_hr"]
+#
+#     for i, split in enumerate(splits):
+#         subset = [r for r in rows if r["split"] == split]
+#
+#         for j, cost in enumerate(costs):
+#             plot(
+#                 axes[i, j],
+#                 subset,
+#                 cost_key=cost,
+#                 title=f"{split.upper()} | {'VRAM' if cost=='vram' else 'Time'}"
+#             )
+#
+#     plt.tight_layout()
+#     plt.show()
 ##
 # def is_pareto_efficient(y, x):
 #     """
@@ -276,8 +296,8 @@ plot_all(rows)
 # }
 #
 # mappings_split = {
-#     "full": "4-fold training set",
-#     "quarter": "1-fold training set"
+#     "full": "High Data",
+#     "quarter": "Low Data"
 # }
 #
 # mappings_strat = {
