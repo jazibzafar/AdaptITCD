@@ -96,7 +96,7 @@ def plot(ax, rows, cost_key, title, show_labels=True):
     # Pareto frontier line
     # ----------------------------
     fx, fy = pareto_frontier_line(x, y)
-    ax.plot(fx, fy, linestyle="--", linewidth=2, color="black", alpha=0.8)
+    ax.plot(fx, fy, linestyle="--", linewidth=2, color="black", alpha=0.5)
 
     # highlight frontier points
     # ax.scatter(fx, fy, color="black", s=120, zorder=5)
