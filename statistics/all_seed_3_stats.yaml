@@ -1,0 +1,208 @@
+s3_convnext_frozen_full:
+  accuracy:
+    bbox_map_50: 0.4313375949859619
+    mask_map_50: 0.43001484870910645
+  arch: convnext
+  efficiency:
+    peak_vram_gb: 9008.16650390625
+    train_time_sec: 51424.531169079244
+  last_epoch: 50
+  node: node1
+  seed: s3
+  split: full
+  strategy: frozen
+s3_convnext_frozen_quarter:
+  accuracy:
+    bbox_map_50: 0.38123807311058044
+    mask_map_50: 0.3813457787036896
+  arch: convnext
+  efficiency:
+    peak_vram_gb: 9022.96142578125
+    train_time_sec: 13896.706615749747
+  last_epoch: 40
+  node: node1
+  seed: s3
+  split: quarter
+  strategy: frozen
+s3_convnext_full_full:
+  accuracy:
+    bbox_map_50: 0.44545260071754456
+    mask_map_50: 0.4459725320339203
+  arch: convnext
+  efficiency:
+    peak_vram_gb: 13734.08642578125
+    train_time_sec: 27043.25757726701
+  last_epoch: 30
+  node: node5
+  seed: s3
+  split: full
+  strategy: full
+s3_convnext_full_quarter:
+  accuracy:
+    bbox_map_50: 0.4190548062324524
+    mask_map_50: 0.41862255334854126
+  arch: convnext
+  efficiency:
+    peak_vram_gb: 13748.88232421875
+    train_time_sec: 8985.975603243336
+  last_epoch: 25
+  node: node2
+  seed: s3
+  split: quarter
+  strategy: full
+s3_convnext_lora_full:
+  accuracy:
+    bbox_map_50: 0.4809938967227936
+    mask_map_50: 0.48090052604675293
+  arch: convnext
+  efficiency:
+    peak_vram_gb: 13467.74853515625
+    train_time_sec: 38231.06087344885
+  last_epoch: 30
+  node: node2
+  seed: s3
+  split: full
+  strategy: lora
+s3_convnext_lora_quarter:
+  accuracy:
+    bbox_map_50: 0.4423651695251465
+    mask_map_50: 0.44482895731925964
+  arch: convnext
+  efficiency:
+    peak_vram_gb: 13440.77783203125
+    train_time_sec: 12101.76211156696
+  last_epoch: 30
+  node: node2
+  seed: s3
+  split: quarter
+  strategy: lora
+s3_resnet50_frozen_full:
+  accuracy:
+    bbox_map_50: 0.38620755076408386
+    mask_map_50: 0.38497674465179443
+  arch: resnet50
+  efficiency:
+    peak_vram_gb: 9036.90771484375
+    train_time_sec: 39349.29282190278
+  last_epoch: 50
+  node: node1
+  seed: s3
+  split: full
+  strategy: frozen
+s3_resnet50_frozen_quarter:
+  accuracy:
+    bbox_map_50: 0.34466975927352905
+    mask_map_50: 0.3428363800048828
+  arch: resnet50
+  efficiency:
+    peak_vram_gb: 9057.88037109375
+    train_time_sec: 14055.27741285041
+  last_epoch: 50
+  node: node1
+  seed: s3
+  split: quarter
+  strategy: frozen
+s3_resnet50_full_full:
+  accuracy:
+    bbox_map_50: 0.4392685294151306
+    mask_map_50: 0.4404544234275818
+  arch: resnet50
+  efficiency:
+    peak_vram_gb: 10974.890625
+    train_time_sec: 22218.691566403955
+  last_epoch: 30
+  node: node2
+  seed: s3
+  split: full
+  strategy: full
+s3_resnet50_full_quarter:
+  accuracy:
+    bbox_map_50: 0.389660120010376
+    mask_map_50: 0.38736477494239807
+  arch: resnet50
+  efficiency:
+    peak_vram_gb: 10995.869140625
+    train_time_sec: 7433.977401979268
+  last_epoch: 30
+  node: node2
+  seed: s3
+  split: quarter
+  strategy: full
+s3_swin_frozen_full:
+  accuracy:
+    bbox_map_50: 0.37291035056114197
+    mask_map_50: 0.37361210584640503
+  arch: swin
+  efficiency:
+    peak_vram_gb: 9298.68701171875
+    train_time_sec: 40180.6110326536
+  last_epoch: 50
+  node: node2
+  seed: s3
+  split: full
+  strategy: frozen
+s3_swin_frozen_quarter:
+  accuracy:
+    bbox_map_50: 0.33671849966049194
+    mask_map_50: 0.33187854290008545
+  arch: swin
+  efficiency:
+    peak_vram_gb: 9223.78369140625
+    train_time_sec: 22966.031744714826
+  last_epoch: 50
+  node: node1
+  seed: s3
+  split: quarter
+  strategy: frozen
+s3_swin_full_full:
+  accuracy:
+    bbox_map_50: 0.4629805088043213
+    mask_map_50: 0.4649786651134491
+  arch: swin
+  efficiency:
+    peak_vram_gb: 17788.923828125
+    train_time_sec: 31096.19842166407
+  last_epoch: 25
+  node: node5
+  seed: s3
+  split: full
+  strategy: full
+s3_swin_full_quarter:
+  accuracy:
+    bbox_map_50: 0.4142092168331146
+    mask_map_50: 0.41641053557395935
+  arch: swin
+  efficiency:
+    peak_vram_gb: 17806.90185546875
+    train_time_sec: 9795.275207756087
+  last_epoch: 25
+  node: node5
+  seed: s3
+  split: quarter
+  strategy: full
+s3_swin_lora_full:
+  accuracy:
+    bbox_map_50: 0.3758922517299652
+    mask_map_50: 0.3755289912223816
+  arch: swin
+  efficiency:
+    peak_vram_gb: 9303.09326171875
+    train_time_sec: 33924.97421267815
+  last_epoch: 50
+  node: node5
+  seed: s3
+  split: full
+  strategy: lora
+s3_swin_lora_quarter:
+  accuracy:
+    bbox_map_50: 0.3323521614074707
+    mask_map_50: 0.3323623836040497
+  arch: swin
+  efficiency:
+    peak_vram_gb: 9288.11279296875
+    train_time_sec: 12189.964298163075
+  last_epoch: 50
+  node: node5
+  seed: s3
+  split: quarter
+  strategy: lora
