@@ -47,63 +47,60 @@ from utils import event_to_yml, yaml_to_dict_parser, write_dict_to_yaml
 #
 # write_dict_to_yaml(write_metrics, metrics)
 ##
-# SINGLE EXPERIMENT METRICS FILE
-s1_met = yaml_to_dict_parser("./statistics/all_seed_1_stats.yaml")
-s2_met = yaml_to_dict_parser("./statistics/all_seed_2_stats.yaml")
-s3_met = yaml_to_dict_parser("./statistics/all_seed_3_stats.yaml")
-
-
-##
-import re
+# SINGLE METRIC FILE
+import yaml
 from collections import defaultdict
 import numpy as np
 
 
-metrics_to_keep = {
+files = ["./statistics/all_seed_1_stats.yaml",
+        "./statistics/all_seed_2_stats.yaml",
+        "./statistics/all_seed_3_stats.yaml"]
+
+
+scale = {
     "bbox_map_50": 100,
     "mask_map_50": 100,
     "peak_vram_gb": 1 / 1024,         # MB -> GB
     "train_time_sec": 1 / 3600,  # sec -> hr
 }
 
-combined_dict = {}
 
-exp_dicts = [s1_met, s2_met, s3_met]
-exp_dicts = [
-    {
-        re.sub(f"^s\d+_", "", key): value
-        for key, value in d.items()
-    }
-    for d in exp_dicts
-]
+# exp_name -> metric -> list of values
+metrics = defaultdict(lambda: defaultdict(list))
 
-for exp_name in exp_dicts[0]:
+for file in files:
+    with open(file, "r") as f:
+        data = yaml.safe_load(f)
 
-    metric_values = defaultdict(list)
+    for key, stats in data.items():
+        # Remove seed prefix: s1_convnext_frozen_full -> convnext_frozen_full
+        exp_name = "_".join(key.split("_")[1:])
 
-    for seed_dict in exp_dicts:
-        exp_data = seed_dict[exp_name]
+        metrics[exp_name]["bbox_map_50"].append(
+            stats["accuracy"]["bbox_map_50"] * scale["bbox_map_50"]
+        )
+        metrics[exp_name]["mask_map_50"].append(
+            stats["accuracy"]["mask_map_50"] * scale["mask_map_50"]
+        )
+        metrics[exp_name]["peak_vram"].append(
+            stats["efficiency"]["peak_vram_gb"] * scale["peak_vram_gb"]
+        )
+        metrics[exp_name]["train_time"].append(
+            stats["efficiency"]["train_time_sec"] * scale["train_time_sec"]
+        )
 
-        for category_metrics in exp_data.values():
-            for metric_name, value in category_metrics.items():
+combined_metrics = {}
 
-                # Ignore unwanted metrics
-                if metric_name not in ["accuracy", "efficiency"]:
-                    continue
-                elif metric_name == "accuracy":
-                    metric_values["accuracy"][metric_name].append(
-                        value * metrics_to_keep[metric_name]
-                    )
-                else:
-                    metric_values["efficiency"][metric_name].append(
-                        value * metrics_to_keep[metric_name]
-                    )
-
-    combined_dict[exp_name] = {
-        metric_name: [
+for exp_name, exp_metrics in metrics.items():
+    combined_metrics[exp_name] = {
+        metric: [
             float(np.mean(values)),
-            float(np.std(values, ddof=1)),
+            float(np.std(values, ddof=0)),  # use ddof=1 for sample std
         ]
-        for metric_name, values in metric_values.items()
+        for metric, values in exp_metrics.items()
     }
 
+print(combined_metrics)
+##
+write_dict_to_yaml("statistics/combined_stats.yaml", combined_metrics)
