@@ -121,10 +121,10 @@ def plot(ax, rows, cost_key, title, show_labels=True):
         ax.scatter([], [], marker=markers[a], color="gray", label=a)
 
     ax.legend(
-        loc="lower right",  # Places it out of the way of your 30-50 AP data points
+        loc="lower center",  # Places it out of the way of your 30-50 AP data points
         frameon=True,  # Gives it a bounding box background
         fontsize=8,  # Matches the compact aesthetic of your text labels
-        ncol=2,  # Arranges items in 2 columns to save vertical space
+        ncol=6,  # Arranges items in 2 columns to save vertical space
     )
     ax.set_title(title)
     ax.set_ylim(ymin=30.0, ymax=50.0)
@@ -171,6 +171,33 @@ def plot_alt(rows, cost, split, f_name, disp):
         plt.close(fig)
 
 
+def plot_everything(rows, f_name, disp):
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    splits = ["quarter", "full"]
+    costs = ["time_hr", "vram"]
+
+    m_split = {"quarter": "Low Data", "full": "High Data"}
+
+    for i, split in enumerate(splits):
+        subset = [r for r in rows if r["split"] == split]
+        for j, cost in enumerate(costs):
+            plot(
+                axes[i, j],
+                subset,
+                cost_key=cost,
+                title=f"{m_split[split].upper()} | {'VRAM' if cost=='vram' else 'Time'}",
+                show_labels=True
+            )
+
+    plt.tight_layout()
+    if disp:
+        plt.show()
+    else:
+        plt.savefig(f_name, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
 
 
 rows = extract_rows(stats_dict)
@@ -180,8 +207,9 @@ restricted_rows = [row for row in rows if row["vram"]<=12.]
 
 cost = "vram"  # costs = ["vram", "time_hr"]
 split = "full"  # split  ["full", "quarter"]
-f_name = f"./statistics/restricted_{cost}_{split}.png"
-plot_alt(restricted_rows, cost, split, f_name, disp=False)
+f_name = f"./statistics/rest_vram_4x4.png"
+# plot_alt(restricted_rows, cost, split, f_name, disp=True)
+plot_everything(restricted_rows, f_name, False)
 
 
 
