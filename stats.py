@@ -6,23 +6,24 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-stats_yaml = "./statistics/all_seed_1_stats.yaml"
+stats_yaml = "./statistics/combined_stats.yaml"
 stats_dict = yaml_to_dict_parser(stats_yaml)
 
-
+##
 
 def extract_rows(data):
     rows = []
     for k, v in data.items():
+        arch, strategy, split = k.split("_")
         rows.append({
             "name": k,
-            "mask_ap": v["accuracy"]["mask_map_50"],
-            "bbox_ap": v["accuracy"]["bbox_map_50"],
-            "vram": v["efficiency"]["peak_vram_gb"] / 1024,  # GB
-            "time_hr": v["efficiency"]["train_time_sec"] / 3600,
-            "arch": v["arch"],
-            "strategy": v["strategy"],
-            "split": v["split"]
+            "mask_ap": v["mask_map_50"][0],
+            "bbox_ap": v["bbox_map_50"][0],
+            "vram": v["peak_vram"][0],  # GB
+            "time_hr": v["train_time"][0],
+            "arch": arch,
+            "strategy": strategy,
+            "split": split
         })
     return rows
 
@@ -50,19 +51,22 @@ def pareto_frontier_line(x, y):
     return np.array(frontier_x), np.array(frontier_y)
 
 
-# ----------------------------
-# Main plot function
-# ----------------------------
 def plot(ax, rows, cost_key, title, show_labels=True):
 
     strategies = sorted(set(r["strategy"] for r in rows))
     arches = sorted(set(r["arch"] for r in rows))
 
-    markers = {a: m for a, m in zip(arches, ["o", "s", "^"])}  # ["o", "s", "^", "D", "X", "*"]
+    markers = {
+        a: m for a, m in zip(arches, ["o", "s", "^"])
+    }  # ["o", "s", "^", "D", "X", "*"]
     colors = {"frozen": "#56B4E9", "full": "#F0E442", "lora": "#D55E00"}
 
     x = np.array([r[cost_key] for r in rows])
     y = np.array([r["mask_ap"] for r in rows])
+
+    # Calculate a dynamic y-offset based on the fixed y-limits (30 to 50)
+    # 3% of the total 20-point span keeps the text perfectly spaced below the marker
+    y_offset = (50.0 - 30.0) * 0.03
 
     # ----------------------------
     # scatter points
@@ -76,20 +80,26 @@ def plot(ax, rows, cost_key, title, show_labels=True):
             s=90,
             edgecolor="black",
             linewidth=0.8,
-            alpha=0.9
+            alpha=0.9,
         )
-        _s, _ar, _st, _sp = r["name"].split("_")
+        # _ar, _st, _sp = r["name"].split("_")
+        _ar = r["arch"]
+        _st = r["strategy"]
+        _sp = r["split"]
         if _st == "full":
             text_name = _ar + " fft"
         else:
             text_name = _ar + " " + _st
+
         if show_labels:
             ax.text(
                 r[cost_key],
-                r["mask_ap"],
+                r["mask_ap"] - y_offset,  # Apply the offset to push text down
                 text_name,  # r["name"].replace("s1_", "")
                 fontsize=7,
-                alpha=0.75
+                alpha=0.75,
+                va="top",  # Align top of text box to coordinate
+                ha="center",  # Center horizontally under marker
             )
 
     # ----------------------------
@@ -110,16 +120,21 @@ def plot(ax, rows, cost_key, title, show_labels=True):
     for a in arches:
         ax.scatter([], [], marker=markers[a], color="gray", label=a)
 
+    ax.legend(
+        loc="lower right",  # Places it out of the way of your 30-50 AP data points
+        frameon=True,  # Gives it a bounding box background
+        fontsize=8,  # Matches the compact aesthetic of your text labels
+        ncol=2,  # Arranges items in 2 columns to save vertical space
+    )
     ax.set_title(title)
-    ax.set_ylim(ymin=0.30, ymax=0.5)
-    ax.set_xlabel("Peak VRAM Usage (GB)" if cost_key == "vram" else "Training Time (hrs)")
+    ax.set_ylim(ymin=30.0, ymax=50.0)
+    ax.set_xlabel(
+        "Peak VRAM Usage (GB)" if cost_key == "vram" else "Training Time (hrs)"
+    )
     ax.set_ylabel("Mask AP")
     ax.grid(True, alpha=0.3)
 
 
-# ----------------------------
-# Full figure (2x2)
-# ----------------------------
 def plot_all(rows, cost):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 
@@ -139,8 +154,119 @@ def plot_all(rows, cost):
     plt.show()
 
 
+def plot_alt(rows, cost, split, f_name, disp):
+    fig, ax = plt.subplots(figsize=(7, 6))
+    subset = [r for r in rows if r["split"] == split]
+    plot(
+        ax,
+        subset,
+        cost_key=cost,
+        title=f"{'High Data' if split == 'full' else 'Low Data'}/12GB VRAM Restriction"
+    )
+    plt.tight_layout()
+    if disp:
+        plt.show()
+    else:
+        plt.savefig(f_name, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+
+
+
 rows = extract_rows(stats_dict)
-plot_all(rows, "time_hr")  # costs = ["vram", "time_hr"]
+
+restricted_rows = [row for row in rows if row["vram"]<=12.]
+
+
+cost = "vram"  # costs = ["vram", "time_hr"]
+split = "full"  # split  ["full", "quarter"]
+f_name = f"./statistics/restricted_{cost}_{split}.png"
+plot_alt(restricted_rows, cost, split, f_name, disp=False)
+
+
+
+
+
+
+
+
+
+
+
+##
+# ----------------------------
+# Main plot function
+# ----------------------------
+# def plot(ax, rows, cost_key, title, show_labels=True):
+#
+#     strategies = sorted(set(r["strategy"] for r in rows))
+#     arches = sorted(set(r["arch"] for r in rows))
+#
+#     markers = {a: m for a, m in zip(arches, ["o", "s", "^"])}  # ["o", "s", "^", "D", "X", "*"]
+#     colors = {"frozen": "#56B4E9", "full": "#F0E442", "lora": "#D55E00"}
+#
+#     x = np.array([r[cost_key] for r in rows])
+#     y = np.array([r["mask_ap"] for r in rows])
+#
+#     # ----------------------------
+#     # scatter points
+#     # ----------------------------
+#     for r in rows:
+#         ax.scatter(
+#             r[cost_key],
+#             r["mask_ap"],
+#             color=colors[r["strategy"]],
+#             marker=markers[r["arch"]],
+#             s=90,
+#             edgecolor="black",
+#             linewidth=0.8,
+#             alpha=0.9
+#         )
+#         # _ar, _st, _sp = r["name"].split("_")
+#         _ar = r["arch"]
+#         _st = r["strategy"]
+#         _sp = r["split"]
+#         if _st == "full":
+#             text_name = _ar + " fft"
+#         else:
+#             text_name = _ar + " " + _st
+#         if show_labels:
+#             ax.text(
+#                 r[cost_key],
+#                 r["mask_ap"],
+#                 text_name,  # r["name"].replace("s1_", "")
+#                 fontsize=7,
+#                 alpha=0.75
+#             )
+#
+#     # ----------------------------
+#     # Pareto frontier line
+#     # ----------------------------
+#     fx, fy = pareto_frontier_line(x, y)
+#     ax.plot(fx, fy, linestyle="--", linewidth=2, color="black", alpha=0.5)
+#
+#     # highlight frontier points
+#     # ax.scatter(fx, fy, color="black", s=120, zorder=5)
+#
+#     # ----------------------------
+#     # legend proxies
+#     # ----------------------------
+#     for s in strategies:
+#         ax.scatter([], [], color=colors[s], label=s)
+#
+#     for a in arches:
+#         ax.scatter([], [], marker=markers[a], color="gray", label=a)
+#
+#     ax.set_title(title)
+#     ax.set_ylim(ymin=30., ymax=50.)
+#     ax.set_xlabel("Peak VRAM Usage (GB)" if cost_key == "vram" else "Training Time (hrs)")
+#     ax.set_ylabel("Mask AP")
+#     ax.grid(True, alpha=0.3)
+
+
+
+
+
 
 # def plot_all(rows):
 #
