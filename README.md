@@ -1,2 +1,4 @@
 # LoRA4TCD
-Exploring Low Rank Adaptation (LoRA) for Tree Crown Detection
+
+
+Adapting Pretrained Vision Models to Individual Tree Crown Detection (ITCD)
