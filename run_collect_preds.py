@@ -13,7 +13,6 @@ from tqdm.auto import tqdm
 import sys
 
 
-
 def collate_fn(batch):
     return tuple(zip(*batch))
 
@@ -181,6 +180,7 @@ MODEL_ROOT = "/data_hdd/jazibmodels/Fine_Tuning_Strategies/"
 DATA_ROOT = "/data_hdd/jazibsdata/oam-tcd-coco-style-1024/"
 SAVE_ROOT = "/data_hdd/jazibsdata/m2_uncertainty_quant/"
 
+
 SWIN_LIST = [
     's1_swin_full_full', 's1_swin_lora_full', 's1_swin_frozen_quarter', 's1_swin_frozen_full', 's1_swin_full_quarter',
     's1_swin_lora_quarter', 's2_swin_full_full', 's2_swin_full_quarter', 's2_swin_frozen_full',
@@ -213,7 +213,7 @@ SPLIT_DICT = {
 def main():
     for saved_model in SWIN_LIST:
         current_ckpt_path = os.path.join(MODEL_ROOT, saved_model, "last.ckpt")
-        with open(os.path.join(MODEL_ROOT, current_ckpt_path, "args.yaml"), 'r') as stream:
+        with open(os.path.join(MODEL_ROOT, saved_model, "args.yaml"), 'r') as stream:
             args = yaml.safe_load(stream)
         args = DotDict(args)
 
