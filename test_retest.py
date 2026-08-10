@@ -1,15 +1,43 @@
 ##
 import torch
 import os
+from modules import ViTDetBackbone, TorchvisionSwinV2Backbone, ResNet50Backbone, BackboneWithFPN, ConvNeXtBackbone
+from torch.utils.data import DataLoader
+import cv2
+import numpy as np
 from dataset import OAMTCDCOCODataset
 from SimplifiedMaskRCNN import LitMaskRCNN
 import yaml
+import json
+from tqdm.auto import tqdm
+
+
+def collate_fn(batch):
+    return tuple(zip(*batch))
 
 
 class DotDict(dict):
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
+
+
+def mask_to_polygons(mask):
+    """Convert a binary mask to polygon segmentation."""
+    contours, _ = cv2.findContours(
+        mask.astype(np.uint8),
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    polygons = []
+    for contour in contours:
+        # Polygon needs at least 3 points
+        if contour.shape[0] < 3:
+            continue
+        polygon = contour.reshape(-1, 2).flatten().tolist()
+        if len(polygon) >= 6:
+            polygons.append(polygon)
+    return polygons
 
 
 # TODO: Get a list of all the checkpoints
@@ -19,7 +47,7 @@ list_ckpt = [
     's1_convnext_full_full',
     's1_convnext_lora_full'
 ]
-current_ckpt = list_ckpt[1]
+current_ckpt = list_ckpt[0]
 
 
 
@@ -36,9 +64,6 @@ args = DotDict(args)
 
 # [X] seed, backbone, strat, split separation
 seed, backbone, strategy, split = current_ckpt.split("_")
-
-from modules import ViTDetBackbone, TorchvisionSwinV2Backbone, ResNet50Backbone, BackboneWithFPN, ConvNeXtBackbone
-
 
 
 split_dict = {
@@ -89,8 +114,97 @@ model = LitMaskRCNN.load_from_checkpoint(
     args=args
 )
 
+# DONE: Dataloader
+retest_dataloader = DataLoader(
+    dataset=test_dataset,
+    batch_size=args.batch_size,
+    num_workers=args.num_workers,
+    shuffle=False,
+    pin_memory=True,
+    drop_last=False,
+    collate_fn=collate_fn
+)
 
-# TODO: Define the test step
+
+# DONE: Define the predict step
+def predict(prediction_model, dataloader, score_threshold=0.0, device="cuda"):
+    global_anno_counter = 0
+    anno_output_list = []
+    pbar = tqdm(dataloader, desc="Predicting")
+
+    prediction_model.model.eval()
+
+    with torch.no_grad():
+        for batch in pbar:
+            images, targets = batch
+            images = [image.to(device) for image in images]
+            outputs = prediction_model.model(images)
+
+            # Iterate over images in batch
+            for target, output in zip(targets, outputs):
+                # Image ID
+                image_id = target["image_id"]
+                if torch.is_tensor(image_id):
+                    image_id = image_id.item()
+
+                # Predictions for this image
+                boxes = output["boxes"]
+                labels = output["labels"]
+                scores = output["scores"]
+                masks = output["masks"]
+                for box, label, score, mask in zip(boxes, labels, scores, masks):
+                    # Score filtering
+                    score = score.detach().cpu().item()
+                    if score < score_threshold:
+                        continue
+
+                    # Box
+                    box = box.detach().cpu().numpy()
+
+                    # Label
+                    label = label.detach().cpu().item()
+
+                    # Mask
+                    # torchvision Mask R-CNN:
+                    # mask shape = [1, H, W]
+                    mask = mask.detach().cpu().numpy()
+                    mask = mask[0]
+                    mask_binary = (mask >= 0.5).astype(np.uint8)
+                    segmentation = mask_to_polygons(mask_binary)
+                    if len(segmentation) == 0:
+                        continue
+                    # Area
+                    area = float(mask_binary.sum())
+                    # Store annotation
+                    anno_output_list.append({
+                        "anno_id": global_anno_counter,
+                        "image_id": image_id,
+                        "segmentation": segmentation,
+                        "bbox": box.tolist(),
+                        "category_id": label,
+                        "area": area,
+                        "score": score,
+                    })
+                    global_anno_counter += 1
+            pbar.set_postfix(annotations=len(anno_output_list))
+    return anno_output_list
+
+
+attempt_anno_output_list = predict(
+    prediction_model=model,
+    dataloader=retest_dataloader,
+    score_threshold=0.01
+)
+
+##
+save_file = f"./statistics/{current_ckpt}_predict.json"
+
+with open(save_file, "w") as ji:
+    json.dump(attempt_anno_output_list, ji)
+
+##
+# with open(save_file, "r") as jr:
+#     at3 = json.load(jr)
 
 ##
 # DONE: Sensible output test [PASSED]
@@ -102,7 +216,7 @@ model = LitMaskRCNN.load_from_checkpoint(
 # import matplotlib.pyplot as plt
 #
 #
-# sample = test_dataset[333]
+# sample = next(iter(retest_dataloader))
 # img, label = sample
 #
 # with torch.no_grad():
