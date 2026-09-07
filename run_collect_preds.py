@@ -211,7 +211,7 @@ SPLIT_DICT = {
 
 
 def main():
-    for saved_model in SWIN_LIST:
+    for saved_model in CONV_LIST:
         current_ckpt_path = os.path.join(MODEL_ROOT, saved_model, "last.ckpt")
         with open(os.path.join(MODEL_ROOT, saved_model, "args.yaml"), 'r') as stream:
             args = yaml.safe_load(stream)
