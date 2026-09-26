@@ -6,6 +6,7 @@ import os
 import csv
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 import argparse
+import shutil
 
 
 def replace_prefix(text, prefix_add, prefix_rem):
@@ -78,3 +79,11 @@ def event_to_yml(path):
             acc_event_to_dict(path_event, stat_dict)
     write_file = os.path.join(path, "stats.yaml")
     write_dict_to_yaml(write_file, stat_dict)
+
+
+def copy_and_rename(src_path, dest_path, old_name, new_name):
+    # Copy the file
+    shutil.copy(src_path, dest_path)
+    # Rename the copied file
+    new_path = f"{dest_path}/{new_name}"
+    shutil.move(f"{dest_path}/{old_name}", new_path)
