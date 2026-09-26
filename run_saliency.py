@@ -130,11 +130,11 @@ def plot_predictions_bbox(img_tensor, pred, threshold=0.5,):
     scores = scores[keep]
     labels = labels[keep]
     # Category colors
-    category_colors = {1: "red", 2: "blue"}
+    category_colors = {1: "red", 2: "yellow"}
 
     # Colors corresponding to each bounding box
     colors = [
-        category_colors.get(int(label), "yellow")
+        category_colors.get(int(label), "green")
         for label in labels
     ]
 
@@ -165,5 +165,5 @@ def plot_predictions_bbox(img_tensor, pred, threshold=0.5,):
     plt.show()
 
 
-plot_predictions_bbox(input.squeeze(0), output[0], threshold=0.4)
+plot_predictions_bbox(input.squeeze(0), output[0], threshold=0.5)
 ##
