@@ -165,12 +165,16 @@ plot_predictions_bbox(input.squeeze(0), output[0], threshold=0.5)
 ind_1, ind_2 = 4, 16
 ref_bboxes = []
 ref_scores = []
+ref_labels = []
 
 ref_bboxes.append(output[0]['boxes'][ind_1])
 ref_bboxes.append(output[0]['boxes'][ind_2])
 
 ref_scores.append(output[0]['scores'][ind_1])
 ref_scores.append(output[0]['scores'][ind_2])
+
+ref_labels.append(output[0]['labels'][ind_1])
+ref_labels.append(output[0]['labels'][ind_2])
 
 ref_bb = []
 for bb in ref_bboxes:
@@ -179,6 +183,19 @@ for bb in ref_bboxes:
 ref_sc = []
 for sc in ref_scores:
     ref_sc.append(sc.detach().cpu().item())
+
+ref_lb = []
+for lb in ref_labels:
+    ref_lb.append(lb.detach().cpu().item())
+
+# num_references x num_labels (i.e. 2 x 2)
+class_scores = np.zeros((2, 2), dtype=np.float32)
+for i, lb in enumerate(ref_labels):
+    if lb == 1:
+        class_scores[i, 0] = 1.0
+    else:
+        class_scores[i, 1] = 1.0
+
 
 ##
 # since I have the reference bb and sc, let's plot them on top of the original image
@@ -200,18 +217,178 @@ for i, bbox in enumerate(ref_bb):
 plt.show()
 ##
 # define saliency alg - Drise for me
-
 from xaitk_saliency.impls.gen_object_detector_blackbox_sal.drise import DRISEStack
+
+
+from smqtk_detection.interfaces.detect_image_objects import DetectImageObjects
+from smqtk_image_io.bbox import AxisAlignedBoundingBox
+
+
+class MaskRCNNBlackBox(DetectImageObjects):
+
+    def __init__(
+        self,
+        model,
+        device="cuda",
+        batch_size=4,
+        score_threshold=0.0,
+    ):
+        self.model = model
+        self.device = torch.device(device)
+        self.batch_size = batch_size
+        self.score_threshold = score_threshold
+
+        self.model.to(self.device)
+        self.model.eval()
+
+    def get_config(self):
+        """
+        Required by the abstract DetectImageObjects interface.
+
+        The model itself is intentionally not serialized here because
+        we're passing an already-loaded PyTorch model.
+        """
+        return {
+            "device": str(self.device),
+            "batch_size": self.batch_size,
+            "score_threshold": self.score_threshold,
+        }
+
+    def detect_objects(self, images):
+
+        if isinstance(images, torch.Tensor):
+            images = images.detach().cpu().numpy()
+
+        images = np.asarray(images)
+
+        # [H, W, C] -> [1, H, W, C]
+        if images.ndim == 3:
+            images = images[None, ...]
+
+        if images.ndim != 4:
+            raise ValueError(
+                f"Expected [N,H,W,C] or [H,W,C], got {images.shape}"
+            )
+
+        n_images = images.shape[0]
+
+        all_detections = []
+
+        for start in range(0, n_images, self.batch_size):
+
+            end = min(start + self.batch_size, n_images)
+
+            batch_np = images[start:end]
+
+            # HWC -> CHW
+            batch = torch.from_numpy(batch_np).permute(0, 3, 1, 2)
+
+            # uint8 [0,255] -> float [0,1]
+            batch = batch.float() / 255.0
+
+            # torchvision detection models expect:
+            # list of [C,H,W] tensors
+            batch_list = [
+                img.to(self.device)
+                for img in batch
+            ]
+
+            with torch.no_grad():
+                predictions = self.model(batch_list)
+
+            for pred in predictions:
+
+                boxes = pred["boxes"].detach().cpu()
+                labels = pred["labels"].detach().cpu()
+                scores = pred["scores"].detach().cpu()
+
+                image_detections = []
+
+                for box, label, score in zip(
+                    boxes,
+                    labels,
+                    scores,
+                ):
+
+                    score = float(score)
+                    label = int(label)
+
+                    if score < self.score_threshold:
+                        continue
+
+                    x1, y1, x2, y2 = box.tolist()
+
+                    bbox = AxisAlignedBoundingBox(
+                        min_vertex=np.array([x1, y1]),
+                        max_vertex=np.array([x2, y2]),
+                    )
+
+                    score_dict = {
+                        1: 0.0,
+                        2: 0.0,
+                    }
+
+                    if label not in score_dict:
+                        raise ValueError(
+                            f"Unexpected Mask R-CNN class label: {label}"
+                        )
+
+                    score_dict[label] = score
+
+                    image_detections.append(
+                        (bbox, score_dict)
+                    )
+
+                all_detections.append(image_detections)
+
+        return all_detections
+
+
+blackbox_model = MaskRCNNBlackBox(
+    model=lit_model.model,
+    device="cuda",
+    batch_size=1,
+    score_threshold=0.0,
+)
 
 sal_generator = DRISEStack(n=200, s=8, p1=0.5, seed=0, threads=4)
 
-model_mean = [0.485, 0.456, 0.406]
+model_mean = [0.5, 0.5, 0.5]
 blackbox_fill = np.uint8(np.asarray(model_mean) * 255)
 sal_generator.fill = blackbox_fill
 
 sal_maps = sal_generator.generate(
     ex_img,
     np.array(ref_bb),
-    np.array(ref_sc),
-    lit_model.model,
+    class_scores,
+    blackbox_model,
+    objectness=np.array(ref_sc)
 )
+
+##
+# bbox 1
+colorbar_kwargs = {
+    "fraction": 0.046 * (ex_img.shape[0] / ex_img.shape[1]),
+    "pad": 0.04,
+}
+idx = 0
+bbox = ref_bb[idx]
+plt.figure(figsize=(12, 8))
+plt.axis("off")
+plt.imshow(ex_img, alpha=0.7)
+plt.clim(-1, 1)
+plt.imshow(sal_maps[idx], cmap="jet", alpha=0.3)
+ax = plt.gca()
+rect = patches.Rectangle(
+    (bbox[0], bbox[1]),
+    bbox[2] - bbox[0],
+    bbox[3] - bbox[1],
+    linewidth=1,
+    edgecolor="r",
+    facecolor="none",
+)
+ax.add_patch(rect)
+_ = plt.colorbar(**colorbar_kwargs)
+plt.show()
+
+##
