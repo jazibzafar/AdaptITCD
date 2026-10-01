@@ -115,7 +115,7 @@ SPLIT_DICT = {
 
 MODEL_ROOT = "/mnt/cluster/data_hdd/jazibmodels/Fine_Tuning_Strategies/"
 DATA_ROOT = "/mnt/cluster/data_hdd/jazibsdata/oam-tcd-coco-style-1024/"
-ex_model = 's1_convnext_full_full'
+ex_model = 's1_resnet50_full_full'
 
 # loading gt annotations
 anno_source = "/home/jazib/projects/data/oam-tcd-coco-style-1024/coco_annotations_test.json"
@@ -162,7 +162,7 @@ plot_predictions_bbox(input.squeeze(0), output[0], threshold=0.5)
 # https://xaitk-saliency.readthedocs.io/en/latest/examples/DRISE.html
 
 # reference preds, first two
-ind_1, ind_2 = 4, 16
+ind_1, ind_2 = 12, 19
 ref_bboxes = []
 ref_scores = []
 ref_labels = []
@@ -197,7 +197,7 @@ for i, lb in enumerate(ref_labels):
         class_scores[i, 1] = 1.0
 
 
-##
+
 # since I have the reference bb and sc, let's plot them on top of the original image
 _, axs = plt.subplots(1, 2, figsize=(10,4))
 for i, bbox in enumerate(ref_bb):
@@ -392,3 +392,228 @@ _ = plt.colorbar(**colorbar_kwargs)
 plt.show()
 
 ##
+from utils_saliency import classify_tree_predictions
+
+
+classified = classify_tree_predictions(gt_annos, output[0], tau=0.5)
+##
+from utils_saliency import process_saliency_map
+
+
+processed = process_saliency_map(sal_maps[0], kappa=0.85)
+
+##
+
+colorbar_kwargs = {
+    "fraction": 0.046 * (ex_img.shape[0] / ex_img.shape[1]),
+    "pad": 0.04,
+}
+idx = 0
+bbox = ref_bb[idx]
+plt.figure(figsize=(12, 8))
+plt.axis("off")
+plt.imshow(ex_img, alpha=0.7)
+plt.clim(-1, 1)
+plt.imshow(processed["thresholded_map"], cmap="jet", alpha=0.3)
+ax = plt.gca()
+rect = patches.Rectangle(
+    (bbox[0], bbox[1]),
+    bbox[2] - bbox[0],
+    bbox[3] - bbox[1],
+    linewidth=1,
+    edgecolor="r",
+    facecolor="none",
+)
+ax.add_patch(rect)
+_ = plt.colorbar(**colorbar_kwargs)
+plt.show()
+
+
+
+##
+def quantify_saliency(
+    saliency_map,
+    ground_truth_mask,
+    prediction_mask,
+):
+    """
+    Quantify where saliency is located relative to ground truth
+    and prediction masks.
+
+    Parameters
+    ----------
+    saliency_map : np.ndarray
+        2D normalized saliency map.
+
+        Ideally this is the single-component normalized saliency
+        map produced by process_saliency_map().
+
+    ground_truth_mask : np.ndarray
+        Binary 2D ground-truth mask.
+
+    prediction_mask : np.ndarray
+        Binary 2D prediction mask.
+
+    Returns
+    -------
+    dict
+        Contains:
+
+        saliency_inside_gt
+            Fraction of total saliency inside GT.
+
+        saliency_outside_gt
+            Fraction of total saliency outside GT.
+
+        saliency_inside_prediction
+            Fraction of total saliency inside prediction.
+
+        saliency_overlap_gt_prediction
+            Fraction of total saliency inside both GT and prediction.
+
+        raw_saliency_inside_gt
+            Absolute saliency mass inside GT.
+
+        raw_saliency_outside_gt
+            Absolute saliency mass outside GT.
+
+        raw_saliency_inside_prediction
+            Absolute saliency mass inside prediction.
+
+        raw_saliency_overlap_gt_prediction
+            Absolute saliency mass inside GT ∩ prediction.
+    """
+    # ------------------------------------------------------------
+    # 1. Convert inputs to numpy arrays
+    # ------------------------------------------------------------
+    saliency = np.asarray(
+        saliency_map,
+        dtype=np.float32
+    )
+    gt = np.asarray(
+        ground_truth_mask
+    )
+    pred = np.asarray(
+        prediction_mask
+    )
+    # ------------------------------------------------------------
+    # 2. Validate dimensions
+    # ------------------------------------------------------------
+    if saliency.ndim != 2:
+        raise ValueError(
+            "saliency_map must have shape (H, W)"
+        )
+    if gt.shape != saliency.shape:
+        raise ValueError(
+            "ground_truth_mask and saliency_map "
+            "must have the same shape"
+        )
+    if pred.shape != saliency.shape:
+        raise ValueError(
+            "prediction_mask and saliency_map "
+            "must have the same shape"
+        )
+    # ------------------------------------------------------------
+    # 3. Convert masks to binary
+    # ------------------------------------------------------------
+    gt = gt > 0
+    pred = pred > 0
+    # ------------------------------------------------------------
+    # 4. Make sure saliency is non-negative
+    # ------------------------------------------------------------
+    saliency = np.nan_to_num(
+        saliency,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0
+    )
+    saliency = np.maximum(
+        saliency,
+        0
+    )
+    # ------------------------------------------------------------
+    # 5. Total saliency mass
+    # ------------------------------------------------------------
+    total_saliency = saliency.sum()
+    if total_saliency == 0:
+        return {
+            "saliency_inside_gt": 0.0,
+            "saliency_outside_gt": 0.0,
+            "saliency_inside_prediction": 0.0,
+            "saliency_overlap_gt_prediction": 0.0,
+
+            "raw_saliency_inside_gt": 0.0,
+            "raw_saliency_outside_gt": 0.0,
+            "raw_saliency_inside_prediction": 0.0,
+            "raw_saliency_overlap_gt_prediction": 0.0,
+
+            "total_saliency": 0.0,
+        }
+    # ------------------------------------------------------------
+    # 6. Define regions
+    # ------------------------------------------------------------
+    gt_region = gt
+    outside_gt_region = ~gt
+    prediction_region = pred
+    overlap_region = gt & pred
+    # ------------------------------------------------------------
+    # 7. Calculate raw saliency mass
+    # ------------------------------------------------------------
+    saliency_inside_gt = saliency[
+        gt_region
+    ].sum()
+    saliency_outside_gt = saliency[
+        outside_gt_region
+    ].sum()
+    saliency_inside_prediction = saliency[
+        prediction_region
+    ].sum()
+    saliency_overlap_gt_prediction = saliency[
+        overlap_region
+    ].sum()
+    # ------------------------------------------------------------
+    # 8. Normalize by total saliency
+    # ------------------------------------------------------------
+
+    fraction_inside_gt = (
+        saliency_inside_gt
+        / total_saliency
+    )
+    fraction_outside_gt = (
+        saliency_outside_gt
+        / total_saliency
+    )
+    fraction_inside_prediction = (
+        saliency_inside_prediction
+        / total_saliency
+    )
+    fraction_overlap = (
+        saliency_overlap_gt_prediction
+        / total_saliency
+    )
+    # ------------------------------------------------------------
+    # 9. Return
+    # ------------------------------------------------------------
+    return {
+        # Fractions
+        "saliency_inside_gt":
+            float(fraction_inside_gt),
+        "saliency_outside_gt":
+            float(fraction_outside_gt),
+        "saliency_inside_prediction":
+            float(fraction_inside_prediction),
+        "saliency_overlap_gt_prediction":
+            float(fraction_overlap),
+        # Raw values
+        "raw_saliency_inside_gt":
+            float(saliency_inside_gt),
+        "raw_saliency_outside_gt":
+            float(saliency_outside_gt),
+        "raw_saliency_inside_prediction":
+            float(saliency_inside_prediction),
+        "raw_saliency_overlap_gt_prediction":
+            float(saliency_overlap_gt_prediction),
+        "total_saliency":
+            float(total_saliency),
+    }
+
