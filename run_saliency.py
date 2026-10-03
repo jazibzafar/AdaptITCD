@@ -115,7 +115,7 @@ SPLIT_DICT = {
 
 MODEL_ROOT = "/mnt/cluster/data_hdd/jazibmodels/Fine_Tuning_Strategies/"
 DATA_ROOT = "/mnt/cluster/data_hdd/jazibsdata/oam-tcd-coco-style-1024/"
-ex_model = 's1_resnet50_full_full'
+ex_model = 's1_convnext_full_full'
 
 # loading gt annotations
 anno_source = "/home/jazib/projects/data/oam-tcd-coco-style-1024/coco_annotations_test.json"
@@ -162,7 +162,7 @@ plot_predictions_bbox(input.squeeze(0), output[0], threshold=0.5)
 # https://xaitk-saliency.readthedocs.io/en/latest/examples/DRISE.html
 
 # reference preds, first two
-ind_1, ind_2 = 12, 19
+ind_1, ind_2 = 15, 14
 ref_bboxes = []
 ref_scores = []
 ref_labels = []
@@ -214,6 +214,8 @@ for i, bbox in enumerate(ref_bb):
     axs[i].set_title(f"detection #{i+1}")
     axs[i].axis("off")
 
+save_path = "/home/jazib/projects/LoRA4TCD/saliency"
+plt.savefig(os.path.join(save_path, "1.png"))
 plt.show()
 ##
 # define saliency alg - Drise for me
@@ -297,50 +299,37 @@ class MaskRCNNBlackBox(DetectImageObjects):
                 predictions = self.model(batch_list)
 
             for pred in predictions:
-
                 boxes = pred["boxes"].detach().cpu()
                 labels = pred["labels"].detach().cpu()
                 scores = pred["scores"].detach().cpu()
-
                 image_detections = []
-
                 for box, label, score in zip(
                     boxes,
                     labels,
                     scores,
                 ):
-
                     score = float(score)
                     label = int(label)
-
                     if score < self.score_threshold:
                         continue
-
                     x1, y1, x2, y2 = box.tolist()
-
                     bbox = AxisAlignedBoundingBox(
                         min_vertex=np.array([x1, y1]),
                         max_vertex=np.array([x2, y2]),
                     )
-
                     score_dict = {
                         1: 0.0,
                         2: 0.0,
                     }
-
                     if label not in score_dict:
                         raise ValueError(
                             f"Unexpected Mask R-CNN class label: {label}"
                         )
-
                     score_dict[label] = score
-
                     image_detections.append(
                         (bbox, score_dict)
                     )
-
                 all_detections.append(image_detections)
-
         return all_detections
 
 
@@ -371,7 +360,7 @@ colorbar_kwargs = {
     "fraction": 0.046 * (ex_img.shape[0] / ex_img.shape[1]),
     "pad": 0.04,
 }
-idx = 0
+idx = 1
 bbox = ref_bb[idx]
 plt.figure(figsize=(12, 8))
 plt.axis("off")
@@ -394,13 +383,11 @@ plt.show()
 ##
 from utils_saliency import classify_tree_predictions
 
-
 classified = classify_tree_predictions(gt_annos, output[0], tau=0.5)
 ##
 from utils_saliency import process_saliency_map
 
-
-processed = process_saliency_map(sal_maps[0], kappa=0.85)
+processed = process_saliency_map(sal_maps[1], kappa=0.85)
 
 ##
 
@@ -408,7 +395,7 @@ colorbar_kwargs = {
     "fraction": 0.046 * (ex_img.shape[0] / ex_img.shape[1]),
     "pad": 0.04,
 }
-idx = 0
+idx = 1
 bbox = ref_bb[idx]
 plt.figure(figsize=(12, 8))
 plt.axis("off")
@@ -426,194 +413,112 @@ rect = patches.Rectangle(
 )
 ax.add_patch(rect)
 _ = plt.colorbar(**colorbar_kwargs)
+# plt.savefig(os.path.join(save_path, "2b.png"))
 plt.show()
 
 
 
 ##
-def quantify_saliency(
-    saliency_map,
-    ground_truth_mask,
-    prediction_mask,
-):
+# from utils_saliency import quantify_saliency
+#
+# i = 1
+# sm = sal_maps[i]
+# quantify_saliency(saliency_map=sm, ground_truth_mask=)
+
+
+##
+from shapely.geometry import Polygon
+# from utils_saliency import masks_to_coco_polygons
+import cv2
+
+
+def mask_to_polygons(mask, epsilon=1.0):
     """
-    Quantify where saliency is located relative to ground truth
-    and prediction masks.
-
-    Parameters
-    ----------
-    saliency_map : np.ndarray
-        2D normalized saliency map.
-
-        Ideally this is the single-component normalized saliency
-        map produced by process_saliency_map().
-
-    ground_truth_mask : np.ndarray
-        Binary 2D ground-truth mask.
-
-    prediction_mask : np.ndarray
-        Binary 2D prediction mask.
-
-    Returns
-    -------
-    dict
-        Contains:
-
-        saliency_inside_gt
-            Fraction of total saliency inside GT.
-
-        saliency_outside_gt
-            Fraction of total saliency outside GT.
-
-        saliency_inside_prediction
-            Fraction of total saliency inside prediction.
-
-        saliency_overlap_gt_prediction
-            Fraction of total saliency inside both GT and prediction.
-
-        raw_saliency_inside_gt
-            Absolute saliency mass inside GT.
-
-        raw_saliency_outside_gt
-            Absolute saliency mass outside GT.
-
-        raw_saliency_inside_prediction
-            Absolute saliency mass inside prediction.
-
-        raw_saliency_overlap_gt_prediction
-            Absolute saliency mass inside GT ∩ prediction.
+    Convert binary mask to COCO-style polygons
+    Returns: List[List[float]]
     """
-    # ------------------------------------------------------------
-    # 1. Convert inputs to numpy arrays
-    # ------------------------------------------------------------
-    saliency = np.asarray(
-        saliency_map,
-        dtype=np.float32
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-    gt = np.asarray(
-        ground_truth_mask
-    )
-    pred = np.asarray(
-        prediction_mask
-    )
-    # ------------------------------------------------------------
-    # 2. Validate dimensions
-    # ------------------------------------------------------------
-    if saliency.ndim != 2:
-        raise ValueError(
-            "saliency_map must have shape (H, W)"
+    polygons = []
+    for contour in contours:
+        if len(contour) < 3:
+            continue
+        # Optional: simplify polygon
+        contour = cv2.approxPolyDP(contour, epsilon, True)
+        polygon = contour.reshape(-1, 2).flatten().tolist()
+        if len(polygon) >= 6:
+            polygons.append(polygon)
+    return polygons
+
+
+def masks_to_coco_polygons(masks, threshold=0.5):
+    """
+    Convert masks of shape (N, 1, H, W) into COCO polygon format.
+
+    Returns:
+        list[list[list[float]]]:
+            One COCO segmentation per mask.
+    """
+    coco_segmentations = []
+
+    for mask in masks:
+        # (1, H, W) -> (H, W)
+        mask = mask.squeeze(0)
+
+        # If mask contains probabilities, threshold it
+        binary_mask = (mask >= threshold).astype(np.uint8)
+
+        # Find external contours
+        contours, _ = cv2.findContours(
+            binary_mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
         )
-    if gt.shape != saliency.shape:
-        raise ValueError(
-            "ground_truth_mask and saliency_map "
-            "must have the same shape"
-        )
-    if pred.shape != saliency.shape:
-        raise ValueError(
-            "prediction_mask and saliency_map "
-            "must have the same shape"
-        )
-    # ------------------------------------------------------------
-    # 3. Convert masks to binary
-    # ------------------------------------------------------------
-    gt = gt > 0
-    pred = pred > 0
-    # ------------------------------------------------------------
-    # 4. Make sure saliency is non-negative
-    # ------------------------------------------------------------
-    saliency = np.nan_to_num(
-        saliency,
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0
-    )
-    saliency = np.maximum(
-        saliency,
-        0
-    )
-    # ------------------------------------------------------------
-    # 5. Total saliency mass
-    # ------------------------------------------------------------
-    total_saliency = saliency.sum()
-    if total_saliency == 0:
-        return {
-            "saliency_inside_gt": 0.0,
-            "saliency_outside_gt": 0.0,
-            "saliency_inside_prediction": 0.0,
-            "saliency_overlap_gt_prediction": 0.0,
 
-            "raw_saliency_inside_gt": 0.0,
-            "raw_saliency_outside_gt": 0.0,
-            "raw_saliency_inside_prediction": 0.0,
-            "raw_saliency_overlap_gt_prediction": 0.0,
+        polygons = []
 
-            "total_saliency": 0.0,
-        }
-    # ------------------------------------------------------------
-    # 6. Define regions
-    # ------------------------------------------------------------
-    gt_region = gt
-    outside_gt_region = ~gt
-    prediction_region = pred
-    overlap_region = gt & pred
-    # ------------------------------------------------------------
-    # 7. Calculate raw saliency mass
-    # ------------------------------------------------------------
-    saliency_inside_gt = saliency[
-        gt_region
-    ].sum()
-    saliency_outside_gt = saliency[
-        outside_gt_region
-    ].sum()
-    saliency_inside_prediction = saliency[
-        prediction_region
-    ].sum()
-    saliency_overlap_gt_prediction = saliency[
-        overlap_region
-    ].sum()
-    # ------------------------------------------------------------
-    # 8. Normalize by total saliency
-    # ------------------------------------------------------------
+        for contour in contours:
+            # COCO polygons need at least 3 points
+            if len(contour) < 3:
+                continue
 
-    fraction_inside_gt = (
-        saliency_inside_gt
-        / total_saliency
-    )
-    fraction_outside_gt = (
-        saliency_outside_gt
-        / total_saliency
-    )
-    fraction_inside_prediction = (
-        saliency_inside_prediction
-        / total_saliency
-    )
-    fraction_overlap = (
-        saliency_overlap_gt_prediction
-        / total_saliency
-    )
-    # ------------------------------------------------------------
-    # 9. Return
-    # ------------------------------------------------------------
-    return {
-        # Fractions
-        "saliency_inside_gt":
-            float(fraction_inside_gt),
-        "saliency_outside_gt":
-            float(fraction_outside_gt),
-        "saliency_inside_prediction":
-            float(fraction_inside_prediction),
-        "saliency_overlap_gt_prediction":
-            float(fraction_overlap),
-        # Raw values
-        "raw_saliency_inside_gt":
-            float(saliency_inside_gt),
-        "raw_saliency_outside_gt":
-            float(saliency_outside_gt),
-        "raw_saliency_inside_prediction":
-            float(saliency_inside_prediction),
-        "raw_saliency_overlap_gt_prediction":
-            float(saliency_overlap_gt_prediction),
-        "total_saliency":
-            float(total_saliency),
-    }
+            # (N, 1, 2) -> (N, 2)
+            contour = contour.squeeze(1)
 
+            # Flatten [(x,y), (x,y), ...]
+            polygon = contour.flatten().tolist()
+
+            # Need at least 3 vertices = 6 coordinates
+            if len(polygon) >= 6:
+                polygons.append(polygon)
+
+        coco_segmentations.append(polygons)
+
+    return coco_segmentations
+
+
+def coco_to_shapely_polygon(poly_in):
+    if len(poly_in) == 1:
+        return Polygon(zip(poly_in[0][::2], poly_in[0][1::2]))
+    else:
+        return Polygon(zip(poly_in[::2], poly_in[1::2]))
+
+
+pred_polys = masks_to_coco_polygons(output[0]["masks"].detach().cpu().numpy())
+
+# pred_poly = mask_to_polygons(output[0]["masks"][2].detach().cpu().squeeze(0).numpy())
+gt_seg = gt_annos[2]['segmentation']
+gt_poly = Polygon(zip(gt_seg[0][::2], gt_seg[0][1::2]))
+pd_poly = coco_to_shapely_polygon(pred_polys[2])
+##
+
+
+
+
+x1, y1 = gt_poly.exterior.xy
+x2, y2 = pd_poly.exterior.xy
+fig, ax = plt.subplots()
+ax.fill(x1, y1, alpha=0.5, edgecolor='black', linewidth=2)
+ax.fill(x2, y2, alpha=0.5, edgecolor='red', linewidth=2)
+plt.show()

@@ -11,6 +11,7 @@ import yaml
 import json
 from tqdm.auto import tqdm
 import sys
+from utils_saliency_alt import classify_tree_predictions
 
 
 def collate_fn(batch):
@@ -120,12 +121,29 @@ def predict(prediction_model, dataloader, score_threshold=0.0, device="cuda"):
 
     prediction_model.model.eval()
 
+    global_failure_mode = {
+        "gt_anno_count": 0,
+        "output_count": 0,
+        "accurate": 0,
+        "false_positives": 0,
+        "false_negatives": 0,
+        "over_segmentations": 0,
+        "under_segmentations": 0
+    }
+
     with torch.no_grad():
         for batch in pbar:
             images, targets = batch
             images = [image.to(device) for image in images]
             outputs = prediction_model.model(images)
 
+    #         failure_mode_metrics = classify_tree_predictions(targets, outputs[0])
+    #         for k, v in failure_mode_metrics.items():
+    #             if k in global_failure_mode.keys():
+    #                 global_failure_mode[k] += len(v)
+    #         global_failure_mode["gt_anno_count"] += len(targets["boxes"])
+    #         global_failure_mode["output_count"] += len(targets[0]["boxes"])
+    # return global_failure_mode
             # Iterate over images in batch
             for target, output in zip(targets, outputs):
                 # Image ID
@@ -176,9 +194,9 @@ def predict(prediction_model, dataloader, score_threshold=0.0, device="cuda"):
     return anno_output_list
 
 
-MODEL_ROOT = "/data_hdd/jazibmodels/Fine_Tuning_Strategies/"
-DATA_ROOT = "/data_hdd/jazibsdata/oam-tcd-coco-style-1024/"
-SAVE_ROOT = "/data_hdd/jazibsdata/m2_uncertainty_quant/"
+MODEL_ROOT = "/mnt/cluster/data_hdd/jazibmodels/Fine_Tuning_Strategies/"
+DATA_ROOT = "/mnt/cluster/data_hdd/jazibsdata/oam-tcd-coco-style-1024/"
+SAVE_ROOT = "/home/jazib/projects/LoRA4TCD/saliency/"
 
 
 SWIN_LIST = [
@@ -210,8 +228,15 @@ SPLIT_DICT = {
 }
 
 
+SAL_MODEL_LS = [
+    's1_convnext_full_full',
+    's3_convnext_frozen_full',
+    's1_resnet50_full_full',
+    's3_resnet50_frozen_full'
+]
+
 def main():
-    for saved_model in CONV_LIST:
+    for saved_model in SAL_MODEL_LS:
         current_ckpt_path = os.path.join(MODEL_ROOT, saved_model, "last.ckpt")
         with open(os.path.join(MODEL_ROOT, saved_model, "args.yaml"), 'r') as stream:
             args = yaml.safe_load(stream)
