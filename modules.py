@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import timm
-from lora_pytorch import LoRA
+# from lora_pytorch import LoRA
 from torchvision.models.feature_extraction import create_feature_extractor
 from torchvision.ops.feature_pyramid_network import FeaturePyramidNetwork, LastLevelMaxPool
 from torchvision.models import swin_v2_b
@@ -175,12 +175,12 @@ class ViTBackbone(nn.Module):
         print("Missing keys:", missing)
         print("Unexpected keys:", unexpected)
 
-    def apply_lora(self, lora_rank):
-        # Apply LoRA if requested
-        self.vit = LoRA.from_module(self.vit, rank=lora_rank)
-        freeze_except_lora(self.vit)
-        print("LoRA wrapping applied and non-LoRA params frozen")
-        print(f"trainable params: {count_params(self.vit)}")
+    # def apply_lora(self, lora_rank):
+    #     # Apply LoRA if requested
+    #     self.vit = LoRA.from_module(self.vit, rank=lora_rank)
+    #     freeze_except_lora(self.vit)
+    #     print("LoRA wrapping applied and non-LoRA params frozen")
+    #     print(f"trainable params: {count_params(self.vit)}")
 
     def freeze_parameters(self):
         for param in self.vit.parameters():
