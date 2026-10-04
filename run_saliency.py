@@ -14,6 +14,8 @@ from run_collect_preds import get_test_loader, mask_to_polygons
 import yaml
 import torchvision
 from torchvision.transforms.v2 import ToTensor
+from utils_saliency import classify_tree_predictions
+
 
 
 def plot_predictions_bbox(img_tensor, pred, threshold=0.5,):
@@ -113,8 +115,8 @@ SPLIT_DICT = {
 }
 
 
-MODEL_ROOT = "/mnt/cluster/data_hdd/jazibmodels/Fine_Tuning_Strategies/"
-DATA_ROOT = "/mnt/cluster/data_hdd/jazibsdata/oam-tcd-coco-style-1024/"
+MODEL_ROOT = "/home/jazib/projects/savedmodels/"
+DATA_ROOT = "/home/jazib/projects/data/oam-tcd-coco-style-1024/"
 ex_model = 's1_convnext_full_full'
 
 # loading gt annotations
@@ -155,6 +157,8 @@ lit_model.model.eval()
 with torch.no_grad():
     output = lit_model.model(input.to('cuda'))
 
+# classify failure modes
+classified = classify_tree_predictions(gt_annos, output[0], tau=0.5)
 # plot the predicted bboxes
 plot_predictions_bbox(input.squeeze(0), output[0], threshold=0.5)
 ##
@@ -381,9 +385,7 @@ _ = plt.colorbar(**colorbar_kwargs)
 plt.show()
 
 ##
-from utils_saliency import classify_tree_predictions
 
-classified = classify_tree_predictions(gt_annos, output[0], tau=0.5)
 ##
 from utils_saliency import process_saliency_map
 

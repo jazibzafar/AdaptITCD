@@ -121,9 +121,10 @@ def predict(prediction_model, dataloader, score_threshold=0.0, device="cuda"):
 
     prediction_model.model.eval()
 
+    tau = 0.5
     global_failure_mode = {
         "gt_anno_count": 0,
-        "output_count": 0,
+        "valid_output_count": 0,
         "accurate": 0,
         "false_positives": 0,
         "false_negatives": 0,
@@ -137,65 +138,67 @@ def predict(prediction_model, dataloader, score_threshold=0.0, device="cuda"):
             images = [image.to(device) for image in images]
             outputs = prediction_model.model(images)
 
-    #         failure_mode_metrics = classify_tree_predictions(targets, outputs[0])
-    #         for k, v in failure_mode_metrics.items():
-    #             if k in global_failure_mode.keys():
-    #                 global_failure_mode[k] += len(v)
-    #         global_failure_mode["gt_anno_count"] += len(targets["boxes"])
-    #         global_failure_mode["output_count"] += len(targets[0]["boxes"])
-    # return global_failure_mode
+            for i in range(len(targets)):
+                failure_mode_metrics = classify_tree_predictions(targets[i], outputs[i], tau=tau)
+                for k, v in failure_mode_metrics.items():
+                    if k in global_failure_mode.keys():
+                        global_failure_mode[k] += len(v)
+                global_failure_mode["gt_anno_count"] += len(targets[i]["boxes"])
+                valid_preds = outputs[i]['scores'] > tau
+                global_failure_mode["valid_output_count"] += valid_preds.sum().item()
+    return global_failure_mode
             # Iterate over images in batch
-            for target, output in zip(targets, outputs):
-                # Image ID
-                image_id = target["image_id"]
-                if torch.is_tensor(image_id):
-                    image_id = image_id.item()
+    #         for target, output in zip(targets, outputs):
+    #             # Image ID
+    #             image_id = target["image_id"]
+    #             if torch.is_tensor(image_id):
+    #                 image_id = image_id.item()
+    #
+    #             # Predictions for this image
+    #             boxes = output["boxes"]
+    #             labels = output["labels"]
+    #             scores = output["scores"]
+    #             masks = output["masks"]
+    #             for box, label, score, mask in zip(boxes, labels, scores, masks):
+    #                 # Score filtering
+    #                 score = score.detach().cpu().item()
+    #                 if score < score_threshold:
+    #                     continue
+    #
+    #                 # Box
+    #                 box = box.detach().cpu().numpy()
+    #
+    #                 # Label
+    #                 label = label.detach().cpu().item()
+    #
+    #                 # Mask
+    #                 # torchvision Mask R-CNN:
+    #                 # mask shape = [1, H, W]
+    #                 mask = mask.detach().cpu().numpy()
+    #                 mask = mask[0]
+    #                 mask_binary = (mask >= 0.5).astype(np.uint8)
+    #                 segmentation = mask_to_polygons(mask_binary)
+    #                 if len(segmentation) == 0:
+    #                     continue
+    #                 # Area
+    #                 area = float(mask_binary.sum())
+    #                 # Store annotation
+    #                 anno_output_list.append({
+    #                     "anno_id": global_anno_counter,
+    #                     "image_id": image_id,
+    #                     "segmentation": segmentation,
+    #                     "bbox": box.tolist(),
+    #                     "category_id": label,
+    #                     "area": area,
+    #                     "score": score,
+    #                 })
+    #                 global_anno_counter += 1
+    #         pbar.set_postfix(annotations=len(anno_output_list))
+    # return anno_output_list
 
-                # Predictions for this image
-                boxes = output["boxes"]
-                labels = output["labels"]
-                scores = output["scores"]
-                masks = output["masks"]
-                for box, label, score, mask in zip(boxes, labels, scores, masks):
-                    # Score filtering
-                    score = score.detach().cpu().item()
-                    if score < score_threshold:
-                        continue
 
-                    # Box
-                    box = box.detach().cpu().numpy()
-
-                    # Label
-                    label = label.detach().cpu().item()
-
-                    # Mask
-                    # torchvision Mask R-CNN:
-                    # mask shape = [1, H, W]
-                    mask = mask.detach().cpu().numpy()
-                    mask = mask[0]
-                    mask_binary = (mask >= 0.5).astype(np.uint8)
-                    segmentation = mask_to_polygons(mask_binary)
-                    if len(segmentation) == 0:
-                        continue
-                    # Area
-                    area = float(mask_binary.sum())
-                    # Store annotation
-                    anno_output_list.append({
-                        "anno_id": global_anno_counter,
-                        "image_id": image_id,
-                        "segmentation": segmentation,
-                        "bbox": box.tolist(),
-                        "category_id": label,
-                        "area": area,
-                        "score": score,
-                    })
-                    global_anno_counter += 1
-            pbar.set_postfix(annotations=len(anno_output_list))
-    return anno_output_list
-
-
-MODEL_ROOT = "/mnt/cluster/data_hdd/jazibmodels/Fine_Tuning_Strategies/"
-DATA_ROOT = "/mnt/cluster/data_hdd/jazibsdata/oam-tcd-coco-style-1024/"
+MODEL_ROOT = "/home/jazib/projects/savedmodels/"
+DATA_ROOT = "/home/jazib/projects/data/oam-tcd-coco-style-1024/"
 SAVE_ROOT = "/home/jazib/projects/LoRA4TCD/saliency/"
 
 
@@ -229,10 +232,10 @@ SPLIT_DICT = {
 
 
 SAL_MODEL_LS = [
-    's1_convnext_full_full',
-    's3_convnext_frozen_full',
+    # 's1_convnext_full_full',
+    's1_convnext_frozen_full',
     's1_resnet50_full_full',
-    's3_resnet50_frozen_full'
+    's1_resnet50_frozen_full'
 ]
 
 def main():

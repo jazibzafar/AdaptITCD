@@ -1,12 +1,21 @@
 import torch
-from typing import Dict, Any
 
 
-def box_iou(
-    boxes1: torch.Tensor,
-    boxes2: torch.Tensor
-) -> torch.Tensor:
-    """Pairwise IoU for boxes in [x1, y1, x2, y2] format."""
+def box_iou(boxes1, boxes2):
+    """
+    Calculate pairwise IoU between two sets of boxes.
+
+    Boxes must be in [x1, y1, x2, y2] format.
+
+    Parameters
+    ----------
+    boxes1 : Tensor [N, 4]
+    boxes2 : Tensor [M, 4]
+
+    Returns
+    -------
+    iou : Tensor [N, M]
+    """
 
     if boxes1.numel() == 0 or boxes2.numel() == 0:
         return torch.zeros(
@@ -14,6 +23,7 @@ def box_iou(
             dtype=torch.float32
         )
 
+    # Intersection
     lt = torch.maximum(
         boxes1[:, None, :2],
         boxes2[None, :, :2]
@@ -28,6 +38,7 @@ def box_iou(
 
     intersection = wh[..., 0] * wh[..., 1]
 
+    # Areas
     area1 = (
         (boxes1[:, 2] - boxes1[:, 0]).clamp(min=0)
         *
@@ -40,6 +51,7 @@ def box_iou(
         (boxes2[:, 3] - boxes2[:, 1]).clamp(min=0)
     )
 
+    # Union
     union = (
         area1[:, None]
         + area2[None, :]
@@ -50,175 +62,88 @@ def box_iou(
 
 
 def classify_tree_predictions(
-    gt_output,
-    model_output,
+    target,
+    output,
     tau=0.5
 ):
     """
-    Classify tree-crown predictions into:
+    Classify predictions into:
 
-        accurate
-        over-segmentation
-        under-segmentation
-        false positives
-        false negatives
+        1. Accurate
+        2. Over-segmentation
+        3. Under-segmentation
+        4. False positive
+        5. False negative
 
-    Supports:
+    Parameters
+    ----------
+    target : dict
+        Ground truth for ONE image:
 
-    1. GT as a dictionary containing "boxes"
+        {
+            "boxes": Tensor [N_gt, 4],
+            "labels": Tensor [N_gt],
+            "masks": Tensor [N_gt, 1, H, W],
+            ...
+        }
 
-    OR
+    output : dict
+        Model predictions for ONE image:
 
-    2. GT as a COCO-style list containing dictionaries
-       with "bbox".
+        {
+            "boxes": Tensor [N_pred, 4],
+            "labels": Tensor [N_pred],
+            "scores": Tensor [N_pred],
+            "masks": Tensor [N_pred, 1, H, W]
+        }
 
-    Model output should contain:
+    tau : float
+        IoU threshold.
 
-        "boxes"
-        "labels"
-        "scores"
-        "masks"
-
-    Prediction boxes are assumed to be [x1,y1,x2,y2].
-
-    COCO GT boxes are assumed to be [x,y,width,height].
+    Returns
+    -------
+    results : dict
     """
 
     # =========================================================
-    # 1. Extract GT boxes
+    # 1. Extract boxes
     # =========================================================
 
-    gt_ids = []
+    gt_boxes = target["boxes"].detach().cpu().float()
+    pred_boxes = output["boxes"].detach().cpu().float()
 
-    # ---------------------------------------------------------
-    # CASE A:
-    # GT is already a dictionary with "boxes"
-    # ---------------------------------------------------------
-
-    if isinstance(gt_output, dict) and "boxes" in gt_output:
-
-        gt_boxes = torch.as_tensor(
-            gt_output["boxes"],
+    # Handle no GTs
+    if gt_boxes.numel() == 0:
+        gt_boxes = torch.empty(
+            (0, 4),
             dtype=torch.float32
-        ).cpu()
-
-        # Try to get IDs if available
-        if "ids" in gt_output:
-            gt_ids = gt_output["ids"]
-
-        else:
-            gt_ids = list(range(len(gt_boxes)))
-
-    # ---------------------------------------------------------
-    # CASE B:
-    # GT is a list
-    # ---------------------------------------------------------
-
-    elif isinstance(gt_output, (list, tuple)):
-
-        if len(gt_output) == 0:
-
-            gt_boxes = torch.empty(
-                (0, 4),
-                dtype=torch.float32
-            )
-
-            gt_ids = []
-
-        else:
-
-            # -------------------------------------------------
-            # Check whether list elements contain "bbox"
-            # -------------------------------------------------
-
-            if isinstance(gt_output[0], dict) and "bbox" in gt_output[0]:
-
-                gt_boxes = []
-
-                for i, ann in enumerate(gt_output):
-
-                    x, y, w, h = ann["bbox"]
-
-                    gt_boxes.append([
-                        x,
-                        y,
-                        x + w,
-                        y + h
-                    ])
-
-                    gt_ids.append(
-                        ann.get("id", i)
-                    )
-
-                gt_boxes = torch.tensor(
-                    gt_boxes,
-                    dtype=torch.float32
-                )
-
-            else:
-
-                raise ValueError(
-                    "GT is a list, but its elements do not "
-                    "contain a 'bbox' key. "
-                    f"First element is:\n{gt_output[0]}"
-                )
-
-    else:
-
-        raise TypeError(
-            "gt_output must either be a dictionary "
-            "containing 'boxes' or a list of COCO "
-            "annotation dictionaries."
         )
 
-    # =========================================================
-    # 2. Extract prediction boxes
-    # =========================================================
-
-    pred_boxes = torch.as_tensor(
-        model_output["boxes"],
-        dtype=torch.float32
-    ).cpu()
-
-    pred_scores = None
-
-    if "scores" in model_output:
-
-        pred_scores = torch.as_tensor(
-            model_output["scores"]
-        ).cpu()
-
-    # Handle empty predictions
+    # Handle no predictions
     if pred_boxes.numel() == 0:
-
         pred_boxes = torch.empty(
             (0, 4),
             dtype=torch.float32
         )
 
     # =========================================================
-    # 3. Sanity checks
+    # 2. Number of instances
     # =========================================================
-
-    if gt_boxes.ndim != 2 or gt_boxes.shape[1] != 4:
-
-        raise ValueError(
-            f"GT boxes must have shape [N,4]. "
-            f"Got {gt_boxes.shape}"
-        )
-
-    if pred_boxes.ndim != 2 or pred_boxes.shape[1] != 4:
-
-        raise ValueError(
-            f"Prediction boxes must have shape [N,4]. "
-            f"Got {pred_boxes.shape}"
-        )
 
     n_gt = len(gt_boxes)
     n_pred = len(pred_boxes)
 
     # =========================================================
-    # 4. Calculate IoU matrix
+    # 3. Calculate IoU matrix
+    #
+    # Rows    = GT
+    # Columns = Predictions
+    #
+    #             P1    P2    P3
+    # GT1       0.82  0.03  0.00
+    # GT2       0.71  0.05  0.00
+    # GT3       0.02  0.79  0.01
+    #
     # =========================================================
 
     iou_matrix = box_iou(
@@ -227,12 +152,13 @@ def classify_tree_predictions(
     )
 
     # =========================================================
-    # 5. Establish relationships
+    # 4. Determine relationships
     # =========================================================
 
     overlap_matrix = iou_matrix >= tau
 
-    # For every GT -> predictions
+    # For each GT:
+    # which predictions overlap it?
     gt_matches = [
         torch.where(
             overlap_matrix[i]
@@ -240,7 +166,8 @@ def classify_tree_predictions(
         for i in range(n_gt)
     ]
 
-    # For every prediction -> GTs
+    # For each prediction:
+    # which GTs overlap it?
     pred_matches = [
         torch.where(
             overlap_matrix[:, j]
@@ -249,7 +176,9 @@ def classify_tree_predictions(
     ]
 
     # =========================================================
-    # 6. Accurate
+    # 5. ACCURATE
+    #
+    # One GT <-> one prediction
     # =========================================================
 
     accurate = []
@@ -264,7 +193,6 @@ def classify_tree_predictions(
 
                 accurate.append({
                     "gt_index": gt_idx,
-                    "gt_id": gt_ids[gt_idx],
                     "pred_index": pred_idx,
                     "iou": float(
                         iou_matrix[
@@ -275,7 +203,13 @@ def classify_tree_predictions(
                 })
 
     # =========================================================
-    # 7. Over-segmentation
+    # 6. OVER-SEGMENTATION
+    #
+    # One GT -> multiple predictions
+    #
+    # GT1 -> P1
+    #     -> P2
+    #
     # =========================================================
 
     over_segmentations = []
@@ -286,7 +220,6 @@ def classify_tree_predictions(
 
             over_segmentations.append({
                 "gt_index": gt_idx,
-                "gt_id": gt_ids[gt_idx],
                 "pred_indices": pred_idxs,
                 "num_predictions": len(pred_idxs),
                 "ious": [
@@ -301,7 +234,14 @@ def classify_tree_predictions(
             })
 
     # =========================================================
-    # 8. Under-segmentation
+    # 7. UNDER-SEGMENTATION
+    #
+    # Multiple GTs -> one prediction
+    #
+    # GT1 \
+    # GT2  -> P1
+    # GT3 /
+    #
     # =========================================================
 
     under_segmentations = []
@@ -313,10 +253,6 @@ def classify_tree_predictions(
             under_segmentations.append({
                 "pred_index": pred_idx,
                 "gt_indices": gt_idxs,
-                "gt_ids": [
-                    gt_ids[g]
-                    for g in gt_idxs
-                ],
                 "num_gt": len(gt_idxs),
                 "ious": [
                     float(
@@ -330,7 +266,9 @@ def classify_tree_predictions(
             })
 
     # =========================================================
-    # 9. False negatives
+    # 8. FALSE NEGATIVES
+    #
+    # GT with no prediction above tau
     # =========================================================
 
     false_negatives = []
@@ -340,15 +278,21 @@ def classify_tree_predictions(
         if len(pred_idxs) == 0:
 
             false_negatives.append({
-                "gt_index": gt_idx,
-                "gt_id": gt_ids[gt_idx]
+                "gt_index": gt_idx
             })
 
     # =========================================================
-    # 10. False positives
+    # 9. FALSE POSITIVES
+    #
+    # Prediction with no GT above tau
     # =========================================================
 
     false_positives = []
+
+    scores = output.get("scores", None)
+
+    if scores is not None:
+        scores = scores.detach().cpu()
 
     for pred_idx, gt_idxs in enumerate(pred_matches):
 
@@ -358,40 +302,26 @@ def classify_tree_predictions(
                 "pred_index": pred_idx
             }
 
-            if pred_scores is not None:
-
+            if scores is not None:
                 fp["score"] = float(
-                    pred_scores[pred_idx]
+                    scores[pred_idx]
                 )
 
             false_positives.append(fp)
 
     # =========================================================
-    # 11. Return
+    # 10. Return
     # =========================================================
 
     return {
-
         "accurate": accurate,
+        "over_segmentations": over_segmentations,
+        "under_segmentations": under_segmentations,
+        "false_positives": false_positives,
+        "false_negatives": false_negatives,
 
-        "over_segmentations":
-            over_segmentations,
-
-        "under_segmentations":
-            under_segmentations,
-
-        "false_positives":
-            false_positives,
-
-        "false_negatives":
-            false_negatives,
-
-        "iou_matrix":
-            iou_matrix,
-
-        "gt_matches":
-            gt_matches,
-
-        "pred_matches":
-            pred_matches,
+        # Useful for debugging / analysis
+        "iou_matrix": iou_matrix,
+        "gt_matches": gt_matches,
+        "pred_matches": pred_matches,
     }
