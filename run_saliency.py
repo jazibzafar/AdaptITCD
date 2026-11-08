@@ -219,7 +219,7 @@ for i, bbox in enumerate(ref_bb):
     axs[i].axis("off")
 
 save_path = "/home/jazib/projects/LoRA4TCD/saliency"
-plt.savefig(os.path.join(save_path, "1.png"))
+# plt.savefig(os.path.join(save_path, "1.png"))
 plt.show()
 ##
 # define saliency alg - Drise for me
