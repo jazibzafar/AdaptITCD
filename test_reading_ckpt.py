@@ -605,17 +605,24 @@ def match_color_histogram(target_rgb, ref_hists):
     return np.stack(matched_channels, axis=-1)
 
 
-img_np = 255*imgs[0].detach().cpu().permute(1,2,0).numpy()
+img_np = imgs[0].detach().cpu().permute(1,2,0).numpy()
 
 ##
 from utils import yaml_to_dict_parser
 
 hist_dict = yaml_to_dict_parser("./preds/oam_biome_aligned_4_5_aligned_histcdf.yaml")
-hist_tuple = (hist_dict["hist"]["red"], hist_dict["hist"]["green"], hist_dict["hist"]["blue"])
+h_red, h_green, h_blue = hist_dict["hist"]["red"], hist_dict["hist"]["green"], hist_dict["hist"]["blue"]
+
+for r, g, b in zip(h_red, h_green, h_blue):
+    r = r/255.
+    g = g/255.
+    b = b/255.
+##
+hist_tuple = (h_red, h_green, h_blue)
 
 img_np_matched = match_color_histogram(img_np, hist_tuple)
 ##
-plt.imshow(img_np_matched.astype("uint8"))
+plt.imshow(img_np_matched)
 plt.show()
 
 

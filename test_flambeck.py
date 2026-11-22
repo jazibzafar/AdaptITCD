@@ -16,7 +16,7 @@ TILE_SIZE = 1024
 OVERLAP = 50
 STRIDE = TILE_SIZE - OVERLAP
 
-NODATA = 255  # black, alt: 0 for white but really I want averages or something
+NODATA = 255  # white, alt: 0 for black but really I want averages or something
 LOWER_PERCENTILE = 2
 UPPER_PERCENTILE = 98
 
