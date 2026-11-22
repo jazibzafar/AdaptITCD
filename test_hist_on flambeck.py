@@ -376,6 +376,94 @@ out_tta = collect_preds([p_tta], score_threshold=0.01, filter_tree_groups=True)
 ##
 plot_annotations(img_ali, out_tta[0]["annotations"])
 
+
+##
+from torchvision.ops import box_iou
+
+@torch.inference_mode()
+def iterative_mask_rcnn(
+    model,
+    image,
+    max_iterations=3,
+    score_threshold=0.5,
+    mask_threshold=0.5,
+    mask_value=0.0,
+    duplicate_iou=0.5,
+):
+    """
+    Iterative object detection by masking previously
+    detected instance segmentation masks.
+
+    Args:
+        model: Torchvision Mask R-CNN.
+        image: Tensor [C, H, W], already normalized.
+        max_iterations: Maximum number of inference passes.
+        score_threshold: Minimum detection confidence.
+        mask_threshold: Binary mask threshold.
+        mask_value: Replacement value in normalized space.
+        duplicate_iou: IoU threshold for duplicate boxes.
+
+    Returns:
+        List of predictions from all iterations.
+    """
+
+    model.eval()
+
+    current_image = image.clone()
+    all_predictions = []
+    previous_boxes = []
+
+    for iteration in range(max_iterations):
+
+        prediction = model([current_image])[0]
+
+        # Confidence filtering
+        keep = prediction["scores"] >= score_threshold
+
+        prediction = {
+            k: v[keep] for k, v in prediction.items()
+        }
+
+        if len(prediction["boxes"]) == 0:
+            break
+
+        boxes = prediction["boxes"]
+
+        # Remove detections overlapping previous iterations
+        if previous_boxes:
+
+            old_boxes = torch.cat(previous_boxes)
+
+            iou = box_iou(boxes, old_boxes)
+
+            is_duplicate = iou.max(dim=1).values >= duplicate_iou
+
+            keep = ~is_duplicate
+
+            prediction = {
+                k: v[keep] for k, v in prediction.items()
+            }
+
+        if len(prediction["boxes"]) == 0:
+            break
+
+        # Store new detections
+        all_predictions.append(prediction)
+
+        previous_boxes.append(prediction["boxes"])
+
+        # Mask newly detected segmentation masks
+        masks = prediction["masks"][:, 0] >= mask_threshold
+
+        if masks.any():
+            mask_region = masks.any(dim=0)
+
+            current_image[:, mask_region] = mask_value
+
+    return all_predictions
+
+
+out_mask = iterative_mask_rcnn(model.to("cuda"), ten_img_ali_norm.to("cuda"), max_iterations=5)
 ##
 from matplotlib.patches import Rectangle, Polygon
 
