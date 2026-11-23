@@ -98,7 +98,8 @@ def load_pretrained_maskrcnn_model(model_path):
         rpn_anchor_generator=anchor_generator,
         min_size=model_args.img_size,
         max_size=model_args.img_size,
-        box_detections_per_img=150
+        box_detections_per_img=150,
+        box_score_thresh=0.01,
     )
 
     # load state dict from the checkpoint
